@@ -1,0 +1,64 @@
+plugins {
+    id 'dev.kikugie.loom-back-compat'
+}
+
+version = "${property('mod.version')}+mc${sc.current.version}"
+base.archivesName = 'hotbarsorter'
+
+def javaRelease = property('deps.java').toString().toInteger()
+def requiredJava = JavaVersion.toVersion(javaRelease)
+
+repositories {
+    maven { url = 'https://maven.fabricmc.net/' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${sc.current.version}"
+    loomx.applyMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${property('deps.fabric_loader')}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${property('deps.fabric_api')}"
+    implementation project(':core')
+    include project(':core')
+}
+
+loom {
+    fabricModJsonPath = rootProject.file('src/main/resources/fabric.mod.json')
+    runConfigs.all {
+        preferGradleTask = true
+        generateRunConfig = true
+        runDirectory = rootProject.file("run/${sc.current.version}")
+    }
+}
+
+java {
+    sourceCompatibility = requiredJava
+    targetCompatibility = requiredJava
+    toolchain { languageVersion = JavaLanguageVersion.of(javaRelease) }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = javaRelease
+}
+
+processResources {
+    def modId = project.property('mod.id').toString()
+    def modName = project.property('mod.name').toString()
+    def modVersion = project.version.toString()
+    def mcCompat = project.property('mod.mc_compat').toString()
+    def loaderMin = project.property('deps.fabric_loader').toString()
+    inputs.properties(id: modId, name: modName, version: modVersion, minecraft: mcCompat, loader: loaderMin)
+    filesMatching('fabric.mod.json') {
+        expand(id: modId, name: modName, version: modVersion, minecraft: mcCompat, loader: loaderMin)
+    }
+}
+
+tasks.register('buildAndCollect', Copy) {
+    group = 'build'
+    description = "Builds this Minecraft node and copies its mod jar to ${rootProject.layout.buildDirectory.dir('libs').get().asFile}"
+    dependsOn loomx.modJar
+    from(loomx.modJar.flatMap { it.archiveFile })
+    into(rootProject.layout.buildDirectory.dir('libs'))
+}
+

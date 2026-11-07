@@ -1,0 +1,35 @@
+pluginManagement {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url = 'https://maven.fabricmc.net/' }
+        maven { url = 'https://maven.kikugie.dev/releases' }
+        maven { url = 'https://maven.kikugie.dev/snapshots' }
+    }
+}
+
+plugins {
+    id 'dev.kikugie.stonecutter' version '0.9.8'
+    id 'dev.kikugie.loom-back-compat' version '0.4.2'
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+def mcVersions = ['1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.1', '26.1.2', '26.2', '26.3']
+stonecutter {
+    create(rootProject) {
+        versions(*mcVersions)
+        vcsVersion = '26.3'
+    }
+}
+
+gradle.rootProject { root ->
+    root.tasks.register('buildAllVersions') {
+        group = 'build'
+        description = 'Builds every Stonecutter version and runs core unit tests.'
+        dependsOn ':core:test'
+        dependsOn mcVersions.collect { ":${it}:buildAndCollect" }
+    }
+}
+
+rootProject.name = 'hotbarsorter'
+include 'core'
