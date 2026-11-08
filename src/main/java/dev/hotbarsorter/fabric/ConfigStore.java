@@ -168,6 +168,7 @@ final class ConfigStore {
         List<Rule> target = new ArrayList<>(slots.get(slot));
         target.removeIf(Rule::lock);
         target.add(rule);
+        recalculatePriorities(target);
         slots.set(slot, target);
         rules = new RuleSet(slots, rules.unmatched());
         save();
@@ -177,9 +178,43 @@ final class ConfigStore {
         List<List<Rule>> slots = mutableSlots();
         List<Rule> target = new ArrayList<>(slots.get(slot));
         if (ruleIndex >= 0 && ruleIndex < target.size()) target.remove(ruleIndex);
+        recalculatePriorities(target);
         slots.set(slot, target);
         rules = new RuleSet(slots, rules.unmatched());
         save();
+    }
+
+    void moveRule(int slot, int fromIndex, int toIndex) {
+        List<List<Rule>> slots = mutableSlots();
+        List<Rule> target = new ArrayList<>(slots.get(slot));
+        if (fromIndex < 0 || fromIndex >= target.size() || toIndex < 0 || toIndex >= target.size() || fromIndex == toIndex) return;
+        Rule moved = target.remove(fromIndex);
+        target.add(toIndex, moved);
+        recalculatePriorities(target);
+        slots.set(slot, target);
+        rules = new RuleSet(slots, rules.unmatched());
+        save();
+    }
+
+    void togglePick(int slot, int ruleIndex) {
+        List<List<Rule>> slots = mutableSlots();
+        List<Rule> target = new ArrayList<>(slots.get(slot));
+        if (ruleIndex >= 0 && ruleIndex < target.size()) {
+            Rule r = target.get(ruleIndex);
+            Rule.Pick nextPick = r.pick() == Rule.Pick.BEST ? Rule.Pick.FIRST : Rule.Pick.BEST;
+            target.set(ruleIndex, new Rule(r.match(), r.priority(), nextPick, r.lock()));
+            slots.set(slot, target);
+            rules = new RuleSet(slots, rules.unmatched());
+            save();
+        }
+    }
+
+    private static void recalculatePriorities(List<Rule> target) {
+        for (int i = 0; i < target.size(); i++) {
+            Rule r = target.get(i);
+            int newPriority = Math.max(1, (target.size() - i) * 10);
+            target.set(i, new Rule(r.match(), newPriority, r.pick(), r.lock()));
+        }
     }
 
     void toggleLock(int slot) {

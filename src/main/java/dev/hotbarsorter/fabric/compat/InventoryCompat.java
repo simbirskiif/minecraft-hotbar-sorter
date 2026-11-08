@@ -104,29 +104,83 @@ public final class InventoryCompat {
         //?}
     }
 
-    /** Uses vanilla quick-move behavior to merge a partial stack into compatible stacks. */
+    //? if <26.1 {
+    /*private static void pickup(Minecraft client, int menuSlot) {
+        client.gameMode.handleInventoryMouseClick(client.player.inventoryMenu.containerId, menuSlot,
+                0, ClickType.PICKUP, client.player);
+    }
+    *///?} else {
+    private static void pickup(Minecraft client, int menuSlot) {
+        client.gameMode.handleContainerInput(client.player.inventoryMenu.containerId, menuSlot,
+                0, ContainerInput.PICKUP, client.player);
+    }
+    //?}
+
     public static boolean mergeOneStack(Minecraft client) {
+        return mergeOneStack(client, null, Map.of());
+    }
+
+    public static boolean mergeOneStack(Minecraft client, dev.hotbarsorter.core.RuleSet rules, Map<String, List<String>> customGroups) {
+        if (!canSort(client)) return false;
         var inventory = client.player.getInventory();
-        for (int source = 9; source < 36; source++) {
-            ItemStack stack = inventory.getItem(source);
-            if (stack.isEmpty() || stack.getCount() >= stack.getMaxStackSize()) continue;
-            for (int target = 0; target < 9; target++) {
-                ItemStack other = inventory.getItem(target);
-                if (!other.isEmpty() && other.getCount() < other.getMaxStackSize()
-                        && ItemStack.isSameItemSameComponents(stack, other)) {
-                    int menuSlot = source;
-                    //? if <26.1 {
-                    /*client.gameMode.handleInventoryMouseClick(client.player.inventoryMenu.containerId, menuSlot,
-                            0, ClickType.QUICK_MOVE, client.player);
-                    *///?} else {
-                    client.gameMode.handleContainerInput(client.player.inventoryMenu.containerId, menuSlot,
-                            0, ContainerInput.QUICK_MOVE, client.player);
-                    //?}
+        //? if <1.21.11 {
+        /*int selected = inventory.selected;
+        *///?} else {
+        int selected = inventory.getSelectedSlot();
+        //?}
+        List<ItemView> snapshot = snapshot(client, customGroups);
+
+        for (int t = 0; t < 9; t++) {
+            ItemStack targetStack = inventory.getItem(t);
+            if (targetStack.isEmpty() || targetStack.getCount() >= targetStack.getMaxStackSize()) continue;
+            ItemView targetView = snapshot.get(t);
+            if (targetView == null) continue;
+
+            int tScore = slotMergeScore(rules, t, targetView, selected);
+            boolean isBestTarget = true;
+            for (int other = 0; other < 9; other++) {
+                if (other == t) continue;
+                ItemStack otherStack = inventory.getItem(other);
+                if (!otherStack.isEmpty() && otherStack.getCount() < otherStack.getMaxStackSize()
+                        && ItemStack.isSameItemSameComponents(targetStack, otherStack)) {
+                    ItemView otherView = snapshot.get(other);
+                    int otherScore = slotMergeScore(rules, other, otherView, selected);
+                    if (otherScore > tScore) {
+                        isBestTarget = false;
+                        break;
+                    }
+                }
+            }
+            if (!isBestTarget) continue;
+
+            for (int s = 0; s < 36; s++) {
+                if (s == t) continue;
+                ItemStack sourceStack = inventory.getItem(s);
+                if (!sourceStack.isEmpty() && ItemStack.isSameItemSameComponents(targetStack, sourceStack)) {
+                    int sourceMenu = s < 9 ? 36 + s : s;
+                    int targetMenu = 36 + t;
+                    pickup(client, sourceMenu);
+                    pickup(client, targetMenu);
+                    if (!client.player.containerMenu.getCarried().isEmpty()) {
+                        pickup(client, sourceMenu);
+                    }
                     return true;
                 }
             }
         }
         return false;
+    }
+
+    private static int slotMergeScore(dev.hotbarsorter.core.RuleSet rules, int slot, ItemView view, int selected) {
+        int maxPriority = 0;
+        if (rules != null && view != null) {
+            for (dev.hotbarsorter.core.Rule r : rules.rules(slot)) {
+                if (!r.lock() && view.matches(r.match())) {
+                    maxPriority = Math.max(maxPriority, r.priority());
+                }
+            }
+        }
+        return maxPriority * 100 + (slot == selected ? 10 : 0) - slot;
     }
 
     private static int materialRank(String itemId) {

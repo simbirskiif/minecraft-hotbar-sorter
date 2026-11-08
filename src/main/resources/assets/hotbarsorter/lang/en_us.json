@@ -71,5 +71,7 @@
   "screen.hotbarsorter.slot_hint": "Click to configure · Drag to swap",
   "screen.hotbarsorter.quick_palette": "Quick select from inventory (click):",
   "screen.hotbarsorter.edit_hint": "Click a rule in list to edit",
+  "screen.hotbarsorter.priority_drag_hint": "Drag rules or use ▲/▼ (higher = higher priority)",
+  "screen.hotbarsorter.rank": "#%s",
   "screen.hotbarsorter.page_info": "Page %s of %s"
 }

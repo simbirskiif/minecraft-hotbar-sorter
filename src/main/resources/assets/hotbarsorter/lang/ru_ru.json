@@ -71,5 +71,7 @@
   "screen.hotbarsorter.slot_hint": "Нажмите для настройки · Перетащите для смены мест",
   "screen.hotbarsorter.quick_palette": "Быстрый выбор из инвентаря (нажмите):",
   "screen.hotbarsorter.edit_hint": "Нажмите на правило в списке для редактирования",
+  "screen.hotbarsorter.priority_drag_hint": "Перетащите правило или используйте ▲/▼ (выше = приоритетнее)",
+  "screen.hotbarsorter.rank": "№%s",
   "screen.hotbarsorter.page_info": "Стр. %s из %s"
 }

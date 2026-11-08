@@ -138,7 +138,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             return;
         }
         clicksRemaining--;
-        if (InventoryCompat.mergeOneStack(client)) return;
+        if (InventoryCompat.mergeOneStack(client, CONFIG.rules, CONFIG.customGroups)) return;
         List<SortPlanner.Swap> plan = planner.plan(InventoryCompat.snapshot(client, CONFIG.customGroups), CONFIG.rules);
         if (plan.isEmpty()) { sortingRequested = false; return; }
         InventoryCompat.swap(client, plan.get(0));
@@ -640,73 +640,94 @@ public final class HotbarSorterClient implements ClientModInitializer {
     private final class RuleEditorScreen extends Screen {
         private final int slot;
         private EditBox matcher;
-        private EditBox priority;
         private boolean best;
         private final String initialMatch;
-        private final String initialPriority;
         private final List<ItemStack> inventoryPalette = new ArrayList<>();
+        private int dragRule = -1;
 
-        RuleEditorScreen(int slot) { this(slot, "", "10", true); }
+        RuleEditorScreen(int slot) { this(slot, "", true); }
 
-        RuleEditorScreen(int slot, String matchValue, String priorityValue, boolean bestValue) {
+        RuleEditorScreen(int slot, String matchValue, boolean bestValue) {
             super(Component.translatable("screen.hotbarsorter.rule_title", slot + 1));
             this.slot = slot;
             this.initialMatch = matchValue;
-            this.initialPriority = priorityValue;
             this.best = bestValue;
+        }
+
+        RuleEditorScreen(int slot, String matchValue, String priorityValue, boolean bestValue) {
+            this(slot, matchValue, bestValue);
         }
 
         @Override protected void init() {
             int center = width / 2;
 
-            matcher = addRenderableWidget(new EditBox(font, center - 150, 36, 220, 20,
+            matcher = addRenderableWidget(new EditBox(font, center - 150, 26, 300, 18,
                     Component.translatable("screen.hotbarsorter.match")));
             matcher.setValue(initialMatch);
 
-            priority = addRenderableWidget(new EditBox(font, center + 76, 36, 74, 20,
-                    Component.translatable("screen.hotbarsorter.priority")));
-            priority.setValue(initialPriority);
-
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.choose_item"), b ->
-                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(slot, matcher.getValue(), priority.getValue(), best, "", 0)))
-                    .bounds(center - 150, 58, 146, 20).build());
+                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(slot, matcher.getValue(), "10", best, "", 0)))
+                    .bounds(center - 150, 46, 146, 18).build());
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.choose_group"), b ->
-                    ClientCompat.setScreen(minecraft, new GroupPickerScreen(slot, matcher.getValue(), priority.getValue(), best)))
-                    .bounds(center + 4, 58, 146, 20).build());
+                    ClientCompat.setScreen(minecraft, new GroupPickerScreen(slot, matcher.getValue(), "10", best)))
+                    .bounds(center + 4, 46, 146, 18).build());
 
             addRenderableWidget(Button.builder(lockLabel(), b -> {
                 CONFIG.toggleLock(slot);
                 ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot));
-            }).bounds(center - 150, 80, 146, 20).build());
+            }).bounds(center - 150, 66, 146, 18).build());
 
             addRenderableWidget(Button.builder(pickLabel(), b -> {
                 best = !best;
                 b.setMessage(pickLabel());
-            }).bounds(center + 4, 80, 146, 20).build());
+            }).bounds(center + 4, 66, 146, 18).build());
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.add_rule"), b -> addRule())
-                    .bounds(center - 150, 102, 300, 20).build());
+                    .bounds(center - 150, 86, 300, 18).build());
 
             List<Rule> current = CONFIG.rules.rules(slot);
             for (int i = 0; i < current.size(); i++) {
                 Rule rule = current.get(i);
                 if (rule.lock()) continue;
                 int index = i;
-                int rowY = 126 + i * 22;
+                int rowY = 118 + i * 22;
 
-                Component label = Component.literal(rule.match() + "  ·  " + rule.priority() + (rule.pick() == Rule.Pick.BEST ? " [best]" : ""));
+                Component label = Component.literal("#" + (i + 1) + "  " + rule.match());
                 addRenderableWidget(Button.builder(label, b -> {
                     matcher.setValue(rule.match());
-                    priority.setValue(String.valueOf(rule.priority()));
                     best = rule.pick() == Rule.Pick.BEST;
                     rebuildWidgets();
-                }).bounds(center - 124, rowY, 246, 20).build());
+                }).bounds(center - 126, rowY, 154, 20).build());
+
+                Component modeLabel = Component.literal(rule.pick() == Rule.Pick.BEST ? "Best" : "First");
+                addRenderableWidget(Button.builder(modeLabel, b -> {
+                    CONFIG.togglePick(slot, index);
+                    rebuildWidgets();
+                }).bounds(center + 30, rowY, 40, 20).build());
+
+                Button upBtn = Button.builder(Component.literal("▲"), b -> {
+                    if (index > 0) {
+                        CONFIG.moveRule(slot, index, index - 1);
+                        rebuildWidgets();
+                    }
+                }).bounds(center + 72, rowY, 18, 20).build();
+                if (index == 0) upBtn.active = false;
+                addRenderableWidget(upBtn);
+
+                Button downBtn = Button.builder(Component.literal("▼"), b -> {
+                    if (index < current.size() - 1) {
+                        CONFIG.moveRule(slot, index, index + 1);
+                        rebuildWidgets();
+                    }
+                }).bounds(center + 92, rowY, 18, 20).build();
+                if (index >= current.size() - 1) downBtn.active = false;
+                addRenderableWidget(downBtn);
 
                 addRenderableWidget(Button.builder(Component.literal("✕"), b -> {
                     CONFIG.removeRule(slot, index);
-                    ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot));
-                }).bounds(center + 126, rowY, 24, 20).build());
+                    rebuildWidgets();
+                }).bounds(center + 112, rowY, 20, 20).build());
             }
 
             // Quick select palette from player inventory
@@ -724,7 +745,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }
 
             int paletteStartX = center - Math.min(14, inventoryPalette.size()) * 11;
-            int paletteY = height - 52;
+            int paletteY = height - 50;
             for (int i = 0; i < Math.min(14, inventoryPalette.size()); i++) {
                 ItemStack st = inventoryPalette.get(i);
                 String id = BuiltInRegistries.ITEM.getKey(st.getItem()).toString();
@@ -738,16 +759,62 @@ public final class HotbarSorterClient implements ClientModInitializer {
                     ClientCompat.setScreen(minecraft, new SettingsScreen())).bounds(center - 100, height - 26, 200, 20).build());
         }
 
+        //? if <1.21.9 {
+        /*@Override public boolean mouseClicked(double mouseX, double mouseY, int button) {
+            if (handleRuleClick(mouseX, mouseY, button)) return true;
+            return super.mouseClicked(mouseX, mouseY, button);
+        }
+        @Override public boolean mouseReleased(double mouseX, double mouseY, int button) {
+            return handleRuleRelease(mouseX, mouseY, button) || super.mouseReleased(mouseX, mouseY, button);
+        }*///?} else {
+        @Override public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+            if (handleRuleClick(event.x(), event.y(), event.button())) return true;
+            return super.mouseClicked(event, doubleClick);
+        }
+        @Override public boolean mouseReleased(net.minecraft.client.input.MouseButtonEvent event) {
+            return handleRuleRelease(event.x(), event.y(), event.button()) || super.mouseReleased(event);
+        }
+        //?}
+
+        private boolean handleRuleClick(double mouseX, double mouseY, int button) {
+            if (button == 0) {
+                int center = width / 2;
+                List<Rule> current = CONFIG.rules.rules(slot);
+                for (int i = 0; i < current.size(); i++) {
+                    int rowY = 118 + i * 22;
+                    if (mouseX >= center - 150 && mouseX < center - 126 && mouseY >= rowY && mouseY < rowY + 20) {
+                        dragRule = i;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private boolean handleRuleRelease(double mouseX, double mouseY, int button) {
+            if (button == 0 && dragRule >= 0) {
+                int source = dragRule;
+                dragRule = -1;
+                List<Rule> current = CONFIG.rules.rules(slot);
+                int target = (int) (mouseY - 118) / 22;
+                if (target >= 0 && target < current.size() && target != source) {
+                    CONFIG.moveRule(slot, source, target);
+                    rebuildWidgets();
+                }
+                return true;
+            }
+            return false;
+        }
+
         private void addRule() {
             String match = matcher.getValue().trim();
-            try {
-                int weight = Integer.parseInt(priority.getValue().trim());
-                if (match.isEmpty() || match.equals("#")) throw new IllegalArgumentException();
-                CONFIG.addRule(slot, new Rule(match, weight, best ? Rule.Pick.BEST : Rule.Pick.FIRST, false));
-                ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot));
-            } catch (RuntimeException ex) {
+            if (match.isEmpty() || match.equals("#")) {
                 ClientCompat.showSystemMessage(minecraft, Component.translatable("screen.hotbarsorter.invalid_rule"));
+                return;
             }
+            CONFIG.addRule(slot, new Rule(match, 10, best ? Rule.Pick.BEST : Rule.Pick.FIRST, false));
+            matcher.setValue("");
+            rebuildWidgets();
         }
 
         private Component lockLabel() {
@@ -760,58 +827,90 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //? if <26.1 {
         /*@Override public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float delta) {
             super.render(graphics, mouseX, mouseY, delta);
-            renderEditorContent(graphics);
+            renderEditorContent(graphics, mouseX, mouseY);
         }*///?} else {
         @Override public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
             super.extractRenderState(graphics, mouseX, mouseY, delta);
-            renderEditorContent(graphics);
+            renderEditorContent(graphics, mouseX, mouseY);
         }
         //?}
 
         //? if <26.1 {
-        /*private void renderEditorContent(net.minecraft.client.gui.GuiGraphics graphics) {
+        /*private void renderEditorContent(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY) {
             int center = width / 2;
-            GuiCompat.drawCenteredText(graphics, font, title, center, 14, 0xFFFFFFFF);
-            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.match"), center - 150, 26, 0xFFA0A0A0);
-            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.priority"), center + 76, 26, 0xFFA0A0A0);
+            GuiCompat.drawCenteredText(graphics, font, title, center, 12, 0xFFFFFFFF);
 
             List<Rule> current = CONFIG.rules.rules(slot);
+            if (current.size() > 1) {
+                GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.priority_drag_hint"), center, 106, 0xFFA0A0A0);
+            }
+
             for (int i = 0; i < current.size(); i++) {
                 Rule rule = current.get(i);
                 if (rule.lock()) continue;
-                int rowY = 126 + i * 22;
+                int rowY = 118 + i * 22;
+
+                boolean hoveredDrag = mouseX >= center - 150 && mouseX < center - 126 && mouseY >= rowY && mouseY < rowY + 20;
+                GuiCompat.fill(graphics, center - 150, rowY, center - 128, rowY + 20, hoveredDrag ? 0x90404040 : 0x60202020);
+                GuiCompat.outline(graphics, center - 150, rowY, 22, 20, dragRule == i ? 0xFFFFAA00 : 0xFF444444);
+
                 ItemStack icon = resolveIcon(rule.match());
-                if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, center - 146, rowY + 2);
+                if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, center - 147, rowY + 2);
+            }
+
+            if (dragRule >= 0 && dragRule < current.size()) {
+                int target = (int) (mouseY - 118) / 22;
+                target = Math.max(0, Math.min(current.size() - 1, target));
+                int lineY = 118 + target * 22;
+                GuiCompat.outline(graphics, center - 150, lineY, 282, 20, 0xFF55FF55);
+                ItemStack dragIcon = resolveIcon(current.get(dragRule).match());
+                if (!dragIcon.isEmpty()) GuiCompat.drawItem(graphics, dragIcon, mouseX - 8, mouseY - 8);
             }
 
             if (!inventoryPalette.isEmpty()) {
-                GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.quick_palette"), center, height - 64, 0xFFA0A0A0);
+                GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.quick_palette"), center, height - 62, 0xFFA0A0A0);
                 int paletteStartX = center - Math.min(14, inventoryPalette.size()) * 11;
-                int paletteY = height - 52;
+                int paletteY = height - 50;
                 for (int i = 0; i < Math.min(14, inventoryPalette.size()); i++) {
                     GuiCompat.drawItem(graphics, inventoryPalette.get(i), paletteStartX + i * 22 + 2, paletteY + 2);
                 }
             }
         }*///?} else {
-        private void renderEditorContent(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
+        private void renderEditorContent(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
             int center = width / 2;
-            GuiCompat.drawCenteredText(graphics, font, title, center, 14, 0xFFFFFFFF);
-            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.match"), center - 150, 26, 0xFFA0A0A0);
-            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.priority"), center + 76, 26, 0xFFA0A0A0);
+            GuiCompat.drawCenteredText(graphics, font, title, center, 12, 0xFFFFFFFF);
 
             List<Rule> current = CONFIG.rules.rules(slot);
+            if (current.size() > 1) {
+                GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.priority_drag_hint"), center, 106, 0xFFA0A0A0);
+            }
+
             for (int i = 0; i < current.size(); i++) {
                 Rule rule = current.get(i);
                 if (rule.lock()) continue;
-                int rowY = 126 + i * 22;
+                int rowY = 118 + i * 22;
+
+                boolean hoveredDrag = mouseX >= center - 150 && mouseX < center - 126 && mouseY >= rowY && mouseY < rowY + 20;
+                GuiCompat.fill(graphics, center - 150, rowY, center - 128, rowY + 20, hoveredDrag ? 0x90404040 : 0x60202020);
+                GuiCompat.outline(graphics, center - 150, rowY, 22, 20, dragRule == i ? 0xFFFFAA00 : 0xFF444444);
+
                 ItemStack icon = resolveIcon(rule.match());
-                if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, center - 146, rowY + 2);
+                if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, center - 147, rowY + 2);
+            }
+
+            if (dragRule >= 0 && dragRule < current.size()) {
+                int target = (int) (mouseY - 118) / 22;
+                target = Math.max(0, Math.min(current.size() - 1, target));
+                int lineY = 118 + target * 22;
+                GuiCompat.outline(graphics, center - 150, lineY, 282, 20, 0xFF55FF55);
+                ItemStack dragIcon = resolveIcon(current.get(dragRule).match());
+                if (!dragIcon.isEmpty()) GuiCompat.drawItem(graphics, dragIcon, mouseX - 8, mouseY - 8);
             }
 
             if (!inventoryPalette.isEmpty()) {
-                GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.quick_palette"), center, height - 64, 0xFFA0A0A0);
+                GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.quick_palette"), center, height - 62, 0xFFA0A0A0);
                 int paletteStartX = center - Math.min(14, inventoryPalette.size()) * 11;
-                int paletteY = height - 52;
+                int paletteY = height - 50;
                 for (int i = 0; i < Math.min(14, inventoryPalette.size()); i++) {
                     GuiCompat.drawItem(graphics, inventoryPalette.get(i), paletteStartX + i * 22 + 2, paletteY + 2);
                 }
