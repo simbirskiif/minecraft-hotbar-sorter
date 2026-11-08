@@ -13,7 +13,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
@@ -37,6 +36,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
     private List<String> previousHotbarFingerprint = List.of();
     private Map<String, Integer> screenOpenCounts = Map.of();
     private List<String> screenOpenFingerprint = List.of();
+    private int screenCloseGraceTicks;
     private int intervalElapsed;
     private int manualMoveCooldown;
 
@@ -50,7 +50,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             Screen screen = ClientCompat.currentScreen(client);
             if (sortKey.consumeClick()) requestSort();
             if (client.level != null && client.player != null) {
-                List<ItemView> items = InventoryCompat.snapshot(client);
+                List<ItemView> items = InventoryCompat.snapshot(client, CONFIG.customGroups);
                 Map<String, Integer> counts = itemCounts(items);
                 List<String> fingerprint = fingerprint(items);
                 List<String> hotbarFingerprint = fingerprint(items.subList(0, 9));
@@ -61,13 +61,19 @@ public final class HotbarSorterClient implements ClientModInitializer {
                 }
 
                 boolean screenJustClosed = previousScreen != null && screen == null;
-                boolean inventoryChangedInScreen = screenJustClosed
+                if (screenJustClosed) {
+                    screenCloseGraceTicks = 25;
+                }
+
+                boolean inventoryChangedInScreen = screenCloseGraceTicks > 0
                         && (!screenOpenCounts.equals(counts) || !screenOpenFingerprint.equals(fingerprint));
 
                 boolean manualRearrangement = hasItemSnapshot && !sortingRequested && screen == null
                         && previousItemCounts.equals(counts) && !previousSlotFingerprint.equals(fingerprint);
                 if (manualRearrangement) manualMoveCooldown = 20;
                 else if (manualMoveCooldown > 0) manualMoveCooldown--;
+
+                if (screenCloseGraceTicks > 0) screenCloseGraceTicks--;
 
                 if (CONFIG.onHotbarChange && hasItemSnapshot && !previousHotbarFingerprint.equals(hotbarFingerprint)) requestSort();
                 if (manualMoveCooldown == 0) {
@@ -81,8 +87,10 @@ public final class HotbarSorterClient implements ClientModInitializer {
                     intervalElapsed = 0;
                     if (manualMoveCooldown == 0) requestSort();
                 }
-                previousItemCounts = counts;
-                previousSlotFingerprint = fingerprint;
+                if (screen == null) {
+                    previousItemCounts = counts;
+                    previousSlotFingerprint = fingerprint;
+                }
                 previousHotbarFingerprint = hotbarFingerprint;
                 hasItemSnapshot = true;
             } else {
@@ -91,6 +99,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
                 previousHotbarFingerprint = List.of();
                 screenOpenCounts = Map.of();
                 screenOpenFingerprint = List.of();
+                screenCloseGraceTicks = 0;
                 hasItemSnapshot = false;
                 intervalElapsed = 0;
                 manualMoveCooldown = 0;
@@ -130,7 +139,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
         }
         clicksRemaining--;
         if (InventoryCompat.mergeOneStack(client)) return;
-        List<SortPlanner.Swap> plan = planner.plan(InventoryCompat.snapshot(client), CONFIG.rules);
+        List<SortPlanner.Swap> plan = planner.plan(InventoryCompat.snapshot(client, CONFIG.customGroups), CONFIG.rules);
         if (plan.isEmpty()) { sortingRequested = false; return; }
         InventoryCompat.swap(client, plan.get(0));
     }
@@ -144,6 +153,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
     }
 
     private static ItemStack slotIcon(RuleSet ruleSet, int slot) {
+        if (ruleSet == null) return ItemStack.EMPTY;
         for (Rule rule : ruleSet.rules(slot)) {
             if (rule.lock()) continue;
             ItemStack stack = resolveIcon(rule.match());
@@ -156,6 +166,12 @@ public final class HotbarSorterClient implements ClientModInitializer {
         if (match == null || match.isBlank()) return ItemStack.EMPTY;
         if (!match.startsWith("#")) return findItem(match);
         String tag = match.substring(1).toLowerCase(Locale.ROOT);
+        if (tag.startsWith("group:") || tag.startsWith("custom:")) {
+            String groupName = tag.substring(tag.indexOf(':') + 1);
+            List<String> items = CONFIG.getCustomGroupItems(groupName);
+            if (!items.isEmpty()) return findItem(items.get(0));
+            return findItem("minecraft:chest");
+        }
         if (tag.contains("sword")) return findItem("minecraft:iron_sword");
         if (tag.contains("pickaxe")) return findItem("minecraft:iron_pickaxe");
         if (tag.contains("axe")) return findItem("minecraft:iron_axe");
@@ -165,8 +181,16 @@ public final class HotbarSorterClient implements ClientModInitializer {
         if (tag.contains("food") || tag.contains("meat")) return findItem("minecraft:cooked_beef");
         if (tag.contains("apple")) return findItem("minecraft:golden_apple");
         if (tag.contains("wool")) return findItem("minecraft:white_wool");
+        if (tag.contains("concrete_powder")) return findItem("minecraft:white_concrete_powder");
+        if (tag.contains("concrete")) return findItem("minecraft:white_concrete");
+        if (tag.contains("terracotta")) return findItem("minecraft:terracotta");
+        if (tag.contains("glass")) return findItem("minecraft:glass");
+        if (tag.contains("stone")) return findItem("minecraft:cobblestone");
+        if (tag.contains("ores")) return findItem("minecraft:raw_iron");
+        if (tag.contains("all_wood")) return findItem("minecraft:oak_log");
         if (tag.contains("log")) return findItem("minecraft:oak_log");
         if (tag.contains("plank")) return findItem("minecraft:oak_planks");
+        if (tag.contains("bed")) return findItem("minecraft:red_bed");
         if (tag.contains("arrow")) return findItem("minecraft:arrow");
         if (tag.contains("potion")) return findItem("minecraft:potion");
         if (tag.contains("bucket")) return findItem("minecraft:water_bucket");
@@ -277,37 +301,10 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //? if <26.1 {
         /*@Override public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float delta) {
             super.render(graphics, mouseX, mouseY, delta);
-            drawMainScreen(graphics, mouseX, mouseY);
+            drawSlotsContent(graphics, mouseX, mouseY);
         }*///?} else {
         @Override public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
             super.extractRenderState(graphics, mouseX, mouseY, delta);
-            drawMainScreen(graphics, mouseX, mouseY);
-        }
-        //?}
-
-        //? if <26.1 {
-        /*private void drawMainScreen(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY) {
-            renderSlotsAndHints(graphics, mouseX, mouseY);
-        }*///?} else {
-        private void drawMainScreen(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-            renderSlotsAndHints(graphics, mouseX, mouseY);
-        }
-        //?}
-
-        //? if <26.1 {
-        /*private void renderSlotsAndHints(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY) {
-            renderSlots(graphics, mouseX, mouseY);
-        }*///?} else {
-        private void renderSlotsAndHints(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-            renderSlots(graphics, mouseX, mouseY);
-        }
-        //?}
-
-        //? if <26.1 {
-        /*private void renderSlots(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY) {
-            drawSlotsContent(graphics, mouseX, mouseY);
-        }*///?} else {
-        private void renderSlots(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
             drawSlotsContent(graphics, mouseX, mouseY);
         }
         //?}
@@ -454,30 +451,35 @@ public final class HotbarSorterClient implements ClientModInitializer {
 
             int start = page * PAGE_SIZE;
             int end = Math.min(start + PAGE_SIZE, list.size());
+            int cardW = 194;
+            int cardH = 70;
 
             for (int i = start; i < end; i++) {
                 String presetName = list.get(i);
-                int rowY = 44 + (i - start) * 44;
-
-                addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.preset_load"), b -> {
-                    CONFIG.loadPreset(presetName);
-                    ClientCompat.setScreen(minecraft, new SettingsScreen());
-                }).bounds(cx + 42, rowY + 10, 56, 20).build());
-
-                addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.preset_overwrite"), b -> {
-                    CONFIG.savePreset(presetName);
-                    rebuildWidgets();
-                }).bounds(cx + 102, rowY + 10, 56, 20).build());
+                int rel = i - start;
+                int col = rel % 2;
+                int row = rel / 2;
+                int cardX = col == 0 ? cx - cardW - 6 : cx + 6;
+                int cardY = 40 + row * (cardH + 8);
 
                 addRenderableWidget(Button.builder(Component.literal("✕"), b -> {
                     CONFIG.deletePreset(presetName);
                     rebuildWidgets();
-                }).bounds(cx + 162, rowY + 10, 22, 20).build());
+                }).bounds(cardX + cardW - 20, cardY + 3, 16, 16).build());
+
+                addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.preset_load"), b -> {
+                    CONFIG.loadPreset(presetName);
+                    ClientCompat.setScreen(minecraft, new SettingsScreen());
+                }).bounds(cardX + 11, cardY + 44, 82, 18).build());
+
+                addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.preset_overwrite"), b -> {
+                    CONFIG.savePreset(presetName);
+                    rebuildWidgets();
+                }).bounds(cardX + 101, cardY + 44, 82, 18).build());
             }
 
-            // Bottom actions
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.new_preset"), b ->
-                    ClientCompat.setScreen(minecraft, new PresetNameScreen())).bounds(cx - 184, height - 32, 110, 20).build());
+                    ClientCompat.setScreen(minecraft, new PresetNameScreen())).bounds(cx - 170, height - 32, 105, 20).build());
 
             if (page > 0) {
                 addRenderableWidget(Button.builder(Component.literal("‹"), b -> {
@@ -493,108 +495,110 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }
 
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b ->
-                    ClientCompat.setScreen(minecraft, new SettingsScreen())).bounds(cx + 74, height - 32, 110, 20).build());
+                    ClientCompat.setScreen(minecraft, new SettingsScreen())).bounds(cx + 65, height - 32, 105, 20).build());
         }
 
         //? if <26.1 {
         /*@Override public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float delta) {
             super.render(graphics, mouseX, mouseY, delta);
-            drawPresetManagerContent(graphics, mouseX, mouseY);
+            renderPresetsGrid(graphics);
         }*///?} else {
         @Override public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
             super.extractRenderState(graphics, mouseX, mouseY, delta);
-            drawPresetManagerContent(graphics, mouseX, mouseY);
+            renderPresetsGrid(graphics);
         }
         //?}
 
         //? if <26.1 {
-        /*private void drawPresetManagerContent(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY) {
-            drawPresetRows(graphics, mouseX, mouseY);
-        }*///?} else {
-        private void drawPresetManagerContent(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-            drawPresetRows(graphics, mouseX, mouseY);
-        }
-        //?}
-
-        //? if <26.1 {
-        /*private void drawPresetRows(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY) {
-            renderPresetsList(graphics);
-        }*///?} else {
-        private void drawPresetRows(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
-            renderPresetsList(graphics);
-        }
-        //?}
-
-        //? if <26.1 {
-        /*private void renderPresetsList(net.minecraft.client.gui.GuiGraphics graphics) {
+        /*private void renderPresetsGrid(net.minecraft.client.gui.GuiGraphics graphics) {
             int cx = width / 2;
-            GuiCompat.drawCenteredText(graphics, font, title, cx, 20, 0xFFFFFFFF);
+            GuiCompat.drawCenteredText(graphics, font, title, cx, 16, 0xFFFFFFFF);
             List<String> list = new ArrayList<>(CONFIG.presets.keySet());
             int totalPages = Math.max(1, (list.size() + PAGE_SIZE - 1) / PAGE_SIZE);
             GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.page_info", page + 1, totalPages), cx - 6, height - 26, 0xFFA0A0A0);
 
             int start = page * PAGE_SIZE;
             int end = Math.min(start + PAGE_SIZE, list.size());
-
-            int left = cx - 184;
-            int cardW = 370;
+            int cardW = 194;
+            int cardH = 70;
 
             for (int i = start; i < end; i++) {
                 String name = list.get(i);
-                int rowY = 44 + (i - start) * 44;
+                int rel = i - start;
+                int col = rel % 2;
+                int row = rel / 2;
+                int cardX = col == 0 ? cx - cardW - 6 : cx + 6;
+                int cardY = 40 + row * (cardH + 8);
                 boolean isActive = name.equalsIgnoreCase(CONFIG.activePreset);
 
-                GuiCompat.fill(graphics, left, rowY, left + cardW, rowY + 38, isActive ? 0x90282410 : 0x90151515);
-                GuiCompat.outline(graphics, left, rowY, cardW, 38, isActive ? 0xFFFFAA00 : 0xFF444444);
+                GuiCompat.fill(graphics, cardX, cardY, cardX + cardW, cardY + cardH, isActive ? 0x90282410 : 0x90151515);
+                GuiCompat.outline(graphics, cardX, cardY, cardW, cardH, isActive ? 0xFFFFAA00 : 0xFF444444);
 
                 Component nameComp = Component.literal((isActive ? "★ " : "") + name)
                         .withStyle(isActive ? ChatFormatting.GOLD : ChatFormatting.WHITE, ChatFormatting.BOLD);
-                GuiCompat.drawText(graphics, font, nameComp, left + 6, rowY + 4, 0xFFFFFFFF);
+                GuiCompat.drawText(graphics, font, nameComp, cardX + 6, cardY + 6, 0xFFFFFFFF);
 
                 RuleSet set = CONFIG.presets.get(name);
+                int startSlotX = cardX + 11;
+                int slotY = cardY + 22;
                 for (int s = 0; s < 9; s++) {
-                    int slotX = left + 6 + s * 23;
-                    int slotY = rowY + 16;
+                    int slotX = startSlotX + s * 19;
                     GuiCompat.fill(graphics, slotX, slotY, slotX + 18, slotY + 18, 0x70000000);
                     GuiCompat.outline(graphics, slotX, slotY, 18, 18, 0xFF353535);
-                    ItemStack icon = slotIcon(set, s);
-                    if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, slotX + 1, slotY + 1);
+                    if (set != null) {
+                        if (set.locked(s)) {
+                            GuiCompat.drawText(graphics, font, Component.literal("🔒"), slotX + 3, slotY + 3, 0xFFFF4444);
+                        } else {
+                            ItemStack icon = slotIcon(set, s);
+                            if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, slotX + 1, slotY + 1);
+                        }
+                    }
                 }
             }
         }*///?} else {
-        private void renderPresetsList(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
+        private void renderPresetsGrid(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
             int cx = width / 2;
-            GuiCompat.drawCenteredText(graphics, font, title, cx, 20, 0xFFFFFFFF);
+            GuiCompat.drawCenteredText(graphics, font, title, cx, 16, 0xFFFFFFFF);
             List<String> list = new ArrayList<>(CONFIG.presets.keySet());
             int totalPages = Math.max(1, (list.size() + PAGE_SIZE - 1) / PAGE_SIZE);
             GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.page_info", page + 1, totalPages), cx - 6, height - 26, 0xFFA0A0A0);
 
             int start = page * PAGE_SIZE;
             int end = Math.min(start + PAGE_SIZE, list.size());
-
-            int left = cx - 184;
-            int cardW = 370;
+            int cardW = 194;
+            int cardH = 70;
 
             for (int i = start; i < end; i++) {
                 String name = list.get(i);
-                int rowY = 44 + (i - start) * 44;
+                int rel = i - start;
+                int col = rel % 2;
+                int row = rel / 2;
+                int cardX = col == 0 ? cx - cardW - 6 : cx + 6;
+                int cardY = 40 + row * (cardH + 8);
                 boolean isActive = name.equalsIgnoreCase(CONFIG.activePreset);
 
-                GuiCompat.fill(graphics, left, rowY, left + cardW, rowY + 38, isActive ? 0x90282410 : 0x90151515);
-                GuiCompat.outline(graphics, left, rowY, cardW, 38, isActive ? 0xFFFFAA00 : 0xFF444444);
+                GuiCompat.fill(graphics, cardX, cardY, cardX + cardW, cardY + cardH, isActive ? 0x90282410 : 0x90151515);
+                GuiCompat.outline(graphics, cardX, cardY, cardW, cardH, isActive ? 0xFFFFAA00 : 0xFF444444);
 
                 Component nameComp = Component.literal((isActive ? "★ " : "") + name)
                         .withStyle(isActive ? ChatFormatting.GOLD : ChatFormatting.WHITE, ChatFormatting.BOLD);
-                GuiCompat.drawText(graphics, font, nameComp, left + 6, rowY + 4, 0xFFFFFFFF);
+                GuiCompat.drawText(graphics, font, nameComp, cardX + 6, cardY + 6, 0xFFFFFFFF);
 
                 RuleSet set = CONFIG.presets.get(name);
+                int startSlotX = cardX + 11;
+                int slotY = cardY + 22;
                 for (int s = 0; s < 9; s++) {
-                    int slotX = left + 6 + s * 23;
-                    int slotY = rowY + 16;
+                    int slotX = startSlotX + s * 19;
                     GuiCompat.fill(graphics, slotX, slotY, slotX + 18, slotY + 18, 0x70000000);
                     GuiCompat.outline(graphics, slotX, slotY, 18, 18, 0xFF353535);
-                    ItemStack icon = slotIcon(set, s);
-                    if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, slotX + 1, slotY + 1);
+                    if (set != null) {
+                        if (set.locked(s)) {
+                            GuiCompat.drawText(graphics, font, Component.literal("🔒"), slotX + 3, slotY + 3, 0xFFFF4444);
+                        } else {
+                            ItemStack icon = slotIcon(set, s);
+                            if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, slotX + 1, slotY + 1);
+                        }
+                    }
                 }
             }
         }
@@ -640,6 +644,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
         private boolean best;
         private final String initialMatch;
         private final String initialPriority;
+        private final List<ItemStack> inventoryPalette = new ArrayList<>();
 
         RuleEditorScreen(int slot) { this(slot, "", "10", true); }
 
@@ -654,44 +659,49 @@ public final class HotbarSorterClient implements ClientModInitializer {
         @Override protected void init() {
             int center = width / 2;
 
-            matcher = addRenderableWidget(new EditBox(font, center - 150, 48, 220, 20,
+            matcher = addRenderableWidget(new EditBox(font, center - 150, 36, 220, 20,
                     Component.translatable("screen.hotbarsorter.match")));
             matcher.setValue(initialMatch);
 
-            priority = addRenderableWidget(new EditBox(font, center + 76, 48, 74, 20,
+            priority = addRenderableWidget(new EditBox(font, center + 76, 36, 74, 20,
                     Component.translatable("screen.hotbarsorter.priority")));
             priority.setValue(initialPriority);
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.choose_item"), b ->
                     ClientCompat.setScreen(minecraft, new ItemPickerScreen(slot, matcher.getValue(), priority.getValue(), best, "", 0)))
-                    .bounds(center - 150, 72, 146, 20).build());
+                    .bounds(center - 150, 58, 146, 20).build());
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.choose_group"), b ->
                     ClientCompat.setScreen(minecraft, new GroupPickerScreen(slot, matcher.getValue(), priority.getValue(), best)))
-                    .bounds(center + 4, 72, 146, 20).build());
+                    .bounds(center + 4, 58, 146, 20).build());
 
             addRenderableWidget(Button.builder(lockLabel(), b -> {
                 CONFIG.toggleLock(slot);
                 ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot));
-            }).bounds(center - 150, 96, 146, 20).build());
+            }).bounds(center - 150, 80, 146, 20).build());
 
             addRenderableWidget(Button.builder(pickLabel(), b -> {
                 best = !best;
                 b.setMessage(pickLabel());
-            }).bounds(center + 4, 96, 146, 20).build());
+            }).bounds(center + 4, 80, 146, 20).build());
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.add_rule"), b -> addRule())
-                    .bounds(center - 150, 120, 300, 20).build());
+                    .bounds(center - 150, 102, 300, 20).build());
 
             List<Rule> current = CONFIG.rules.rules(slot);
             for (int i = 0; i < current.size(); i++) {
                 Rule rule = current.get(i);
                 if (rule.lock()) continue;
                 int index = i;
-                int rowY = 146 + i * 24;
+                int rowY = 126 + i * 22;
 
                 Component label = Component.literal(rule.match() + "  ·  " + rule.priority() + (rule.pick() == Rule.Pick.BEST ? " [best]" : ""));
-                addRenderableWidget(Button.builder(label, b -> {}).bounds(center - 124, rowY, 246, 20).build());
+                addRenderableWidget(Button.builder(label, b -> {
+                    matcher.setValue(rule.match());
+                    priority.setValue(String.valueOf(rule.priority()));
+                    best = rule.pick() == Rule.Pick.BEST;
+                    rebuildWidgets();
+                }).bounds(center - 124, rowY, 246, 20).build());
 
                 addRenderableWidget(Button.builder(Component.literal("✕"), b -> {
                     CONFIG.removeRule(slot, index);
@@ -699,8 +709,33 @@ public final class HotbarSorterClient implements ClientModInitializer {
                 }).bounds(center + 126, rowY, 24, 20).build());
             }
 
+            // Quick select palette from player inventory
+            inventoryPalette.clear();
+            if (minecraft != null && minecraft.player != null) {
+                Set<String> seenIds = new HashSet<>();
+                var inv = minecraft.player.getInventory();
+                for (int s = 0; s < 36; s++) {
+                    ItemStack st = inv.getItem(s);
+                    if (!st.isEmpty()) {
+                        String id = BuiltInRegistries.ITEM.getKey(st.getItem()).toString();
+                        if (seenIds.add(id)) inventoryPalette.add(st);
+                    }
+                }
+            }
+
+            int paletteStartX = center - Math.min(14, inventoryPalette.size()) * 11;
+            int paletteY = height - 52;
+            for (int i = 0; i < Math.min(14, inventoryPalette.size()); i++) {
+                ItemStack st = inventoryPalette.get(i);
+                String id = BuiltInRegistries.ITEM.getKey(st.getItem()).toString();
+                int px = paletteStartX + i * 22;
+                addRenderableWidget(Button.builder(Component.empty(), b -> {
+                    matcher.setValue(id);
+                }).bounds(px, paletteY, 20, 20).build());
+            }
+
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b ->
-                    ClientCompat.setScreen(minecraft, new SettingsScreen())).bounds(center - 100, height - 30, 200, 20).build());
+                    ClientCompat.setScreen(minecraft, new SettingsScreen())).bounds(center - 100, height - 26, 200, 20).build());
         }
 
         private void addRule() {
@@ -725,52 +760,61 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //? if <26.1 {
         /*@Override public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float delta) {
             super.render(graphics, mouseX, mouseY, delta);
-            drawRuleEditorContent(graphics);
+            renderEditorContent(graphics);
         }*///?} else {
         @Override public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
             super.extractRenderState(graphics, mouseX, mouseY, delta);
-            drawRuleEditorContent(graphics);
+            renderEditorContent(graphics);
         }
         //?}
 
         //? if <26.1 {
-        /*private void drawRuleEditorContent(net.minecraft.client.gui.GuiGraphics graphics) {
-            renderEditorWidgets(graphics);
-        }*///?} else {
-        private void drawRuleEditorContent(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
-            renderEditorWidgets(graphics);
-        }
-        //?}
-
-        //? if <26.1 {
-        /*private void renderEditorWidgets(net.minecraft.client.gui.GuiGraphics graphics) {
+        /*private void renderEditorContent(net.minecraft.client.gui.GuiGraphics graphics) {
             int center = width / 2;
-            GuiCompat.drawCenteredText(graphics, font, title, center, 20, 0xFFFFFFFF);
-            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.match"), center - 150, 36, 0xFFA0A0A0);
-            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.priority"), center + 76, 36, 0xFFA0A0A0);
+            GuiCompat.drawCenteredText(graphics, font, title, center, 14, 0xFFFFFFFF);
+            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.match"), center - 150, 26, 0xFFA0A0A0);
+            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.priority"), center + 76, 26, 0xFFA0A0A0);
 
             List<Rule> current = CONFIG.rules.rules(slot);
             for (int i = 0; i < current.size(); i++) {
                 Rule rule = current.get(i);
                 if (rule.lock()) continue;
-                int rowY = 146 + i * 24;
+                int rowY = 126 + i * 22;
                 ItemStack icon = resolveIcon(rule.match());
                 if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, center - 146, rowY + 2);
             }
+
+            if (!inventoryPalette.isEmpty()) {
+                GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.quick_palette"), center, height - 64, 0xFFA0A0A0);
+                int paletteStartX = center - Math.min(14, inventoryPalette.size()) * 11;
+                int paletteY = height - 52;
+                for (int i = 0; i < Math.min(14, inventoryPalette.size()); i++) {
+                    GuiCompat.drawItem(graphics, inventoryPalette.get(i), paletteStartX + i * 22 + 2, paletteY + 2);
+                }
+            }
         }*///?} else {
-        private void renderEditorWidgets(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
+        private void renderEditorContent(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
             int center = width / 2;
-            GuiCompat.drawCenteredText(graphics, font, title, center, 20, 0xFFFFFFFF);
-            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.match"), center - 150, 36, 0xFFA0A0A0);
-            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.priority"), center + 76, 36, 0xFFA0A0A0);
+            GuiCompat.drawCenteredText(graphics, font, title, center, 14, 0xFFFFFFFF);
+            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.match"), center - 150, 26, 0xFFA0A0A0);
+            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.priority"), center + 76, 26, 0xFFA0A0A0);
 
             List<Rule> current = CONFIG.rules.rules(slot);
             for (int i = 0; i < current.size(); i++) {
                 Rule rule = current.get(i);
                 if (rule.lock()) continue;
-                int rowY = 146 + i * 24;
+                int rowY = 126 + i * 22;
                 ItemStack icon = resolveIcon(rule.match());
                 if (!icon.isEmpty()) GuiCompat.drawItem(graphics, icon, center - 146, rowY + 2);
+            }
+
+            if (!inventoryPalette.isEmpty()) {
+                GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.quick_palette"), center, height - 64, 0xFFA0A0A0);
+                int paletteStartX = center - Math.min(14, inventoryPalette.size()) * 11;
+                int paletteY = height - 52;
+                for (int i = 0; i < Math.min(14, inventoryPalette.size()); i++) {
+                    GuiCompat.drawItem(graphics, inventoryPalette.get(i), paletteStartX + i * 22 + 2, paletteY + 2);
+                }
             }
         }
         //?}
@@ -854,19 +898,10 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //? if <26.1 {
         /*@Override public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float delta) {
             super.render(graphics, mouseX, mouseY, delta);
-            drawItemPickerContent(graphics);
+            drawItemRows(graphics);
         }*///?} else {
         @Override public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
             super.extractRenderState(graphics, mouseX, mouseY, delta);
-            drawItemPickerContent(graphics);
-        }
-        //?}
-
-        //? if <26.1 {
-        /*private void drawItemPickerContent(net.minecraft.client.gui.GuiGraphics graphics) {
-            drawItemRows(graphics);
-        }*///?} else {
-        private void drawItemPickerContent(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
             drawItemRows(graphics);
         }
         //?}
@@ -908,19 +943,32 @@ public final class HotbarSorterClient implements ClientModInitializer {
         private final String ruleMatch;
         private final String rulePriority;
         private final boolean ruleBest;
-        private final List<GroupOption> groups = List.of(
+        private boolean showCustom;
+        private int page;
+        private static final int PAGE_SIZE = 12;
+
+        private final List<GroupOption> builtins = List.of(
+                new GroupOption("screen.hotbarsorter.group_wood", "#builtin:all_wood", "minecraft:oak_log"),
+                new GroupOption("screen.hotbarsorter.group_concrete", "#builtin:concrete", "minecraft:white_concrete"),
+                new GroupOption("screen.hotbarsorter.group_concrete_powder", "#builtin:concrete_powder", "minecraft:white_concrete_powder"),
+                new GroupOption("screen.hotbarsorter.group_terracotta", "#builtin:terracotta", "minecraft:terracotta"),
+                new GroupOption("screen.hotbarsorter.group_glass", "#builtin:glass", "minecraft:glass"),
+                new GroupOption("screen.hotbarsorter.group_stone", "#builtin:stone", "minecraft:cobblestone"),
+                new GroupOption("screen.hotbarsorter.group_ores", "#builtin:ores", "minecraft:raw_iron"),
+                new GroupOption("screen.hotbarsorter.group_golden_apples", "#builtin:golden_apples", "minecraft:golden_apple"),
+                new GroupOption("screen.hotbarsorter.group_beds", "#minecraft:beds", "minecraft:red_bed"),
                 new GroupOption("screen.hotbarsorter.group_swords", "#minecraft:swords", "minecraft:iron_sword"),
                 new GroupOption("screen.hotbarsorter.group_pickaxes", "#minecraft:pickaxes", "minecraft:iron_pickaxe"),
                 new GroupOption("screen.hotbarsorter.group_axes", "#minecraft:axes", "minecraft:iron_axe"),
                 new GroupOption("screen.hotbarsorter.group_shovels", "#minecraft:shovels", "minecraft:iron_shovel"),
                 new GroupOption("screen.hotbarsorter.group_hoes", "#minecraft:hoes", "minecraft:iron_hoe"),
-                new GroupOption("screen.hotbarsorter.group_bows", "#minecraft:bows", "minecraft:bow"),
-                new GroupOption("screen.hotbarsorter.group_food", "#minecraft:food", "minecraft:cooked_beef"),
+                new GroupOption("screen.hotbarsorter.group_bows", "#builtin:bows", "minecraft:bow"),
+                new GroupOption("screen.hotbarsorter.group_food", "#builtin:food", "minecraft:cooked_beef"),
                 new GroupOption("screen.hotbarsorter.group_wool", "#minecraft:wool", "minecraft:white_wool"),
                 new GroupOption("screen.hotbarsorter.group_logs", "#minecraft:logs", "minecraft:oak_log"),
                 new GroupOption("screen.hotbarsorter.group_planks", "#minecraft:planks", "minecraft:oak_planks"),
                 new GroupOption("screen.hotbarsorter.group_arrows", "#minecraft:arrows", "minecraft:arrow"),
-                new GroupOption("screen.hotbarsorter.group_potions", "#minecraft:potions", "minecraft:potion"));
+                new GroupOption("screen.hotbarsorter.group_potions", "#builtin:potions", "minecraft:potion"));
 
         GroupPickerScreen(int slot, String ruleMatch, String rulePriority, boolean ruleBest) {
             super(Component.translatable("screen.hotbarsorter.group_picker"));
@@ -932,41 +980,107 @@ public final class HotbarSorterClient implements ClientModInitializer {
 
         @Override protected void init() {
             int cx = width / 2;
-            int colW = 175;
+            int colW = 185;
 
-            for (int i = 0; i < groups.size(); i++) {
-                GroupOption group = groups.get(i);
-                int col = i % 2;
-                int row = i / 2;
-                int x = col == 0 ? cx - colW - 5 : cx + 5;
-                int y = 46 + row * 28;
+            // Tabs: Built-in vs Custom
+            addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.builtin_groups"), b -> {
+                showCustom = false;
+                page = 0;
+                rebuildWidgets();
+            }).bounds(cx - 180, 24, 110, 18).build());
 
-                addRenderableWidget(Button.builder(Component.translatable(group.key()), b ->
-                        ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, group.matcher(), rulePriority, ruleBest)))
-                        .bounds(x + 24, y, colW - 24, 24).build());
+            addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.custom_groups"), b -> {
+                showCustom = true;
+                page = 0;
+                rebuildWidgets();
+            }).bounds(cx - 65, 24, 110, 18).build());
+
+            addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.new_group"), b -> {
+                ClientCompat.setScreen(minecraft, new CustomGroupEditorScreen("", slot, ruleMatch, rulePriority, ruleBest));
+            }).bounds(cx + 50, 24, 130, 18).build());
+
+            if (!showCustom) {
+                int totalPages = Math.max(1, (builtins.size() + PAGE_SIZE - 1) / PAGE_SIZE);
+                if (page >= totalPages) page = totalPages - 1;
+                int start = page * PAGE_SIZE;
+                int end = Math.min(start + PAGE_SIZE, builtins.size());
+
+                for (int i = start; i < end; i++) {
+                    GroupOption group = builtins.get(i);
+                    int rel = i - start;
+                    int col = rel % 2;
+                    int row = rel / 2;
+                    int x = col == 0 ? cx - colW - 5 : cx + 5;
+                    int y = 46 + row * 24;
+
+                    addRenderableWidget(Button.builder(Component.translatable(group.key()), b ->
+                            ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, group.matcher(), rulePriority, ruleBest)))
+                            .bounds(x + 22, y, colW - 22, 22).build());
+                }
+
+                if (page > 0) addRenderableWidget(Button.builder(Component.literal("‹"), b -> {
+                    page--;
+                    rebuildWidgets();
+                }).bounds(cx - 30, height - 28, 24, 20).build());
+
+                if (end < builtins.size()) addRenderableWidget(Button.builder(Component.literal("›"), b -> {
+                    page++;
+                    rebuildWidgets();
+                }).bounds(cx + 6, height - 28, 24, 20).build());
+            } else {
+                List<String> customList = new ArrayList<>(CONFIG.customGroups.keySet());
+                int totalPages = Math.max(1, (customList.size() + PAGE_SIZE - 1) / PAGE_SIZE);
+                if (page >= totalPages) page = totalPages - 1;
+                int start = page * PAGE_SIZE;
+                int end = Math.min(start + PAGE_SIZE, customList.size());
+
+                for (int i = start; i < end; i++) {
+                    String groupName = customList.get(i);
+                    int rel = i - start;
+                    int col = rel % 2;
+                    int row = rel / 2;
+                    int x = col == 0 ? cx - colW - 5 : cx + 5;
+                    int y = 46 + row * 24;
+
+                    List<String> items = CONFIG.getCustomGroupItems(groupName);
+                    Component label = Component.literal("#group:" + groupName + " (" + items.size() + ")");
+                    addRenderableWidget(Button.builder(label, b ->
+                            ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, "#group:" + groupName, rulePriority, ruleBest)))
+                            .bounds(x + 22, y, colW - 68, 22).build());
+
+                    addRenderableWidget(Button.builder(Component.literal("✎"), b ->
+                            ClientCompat.setScreen(minecraft, new CustomGroupEditorScreen(groupName, slot, ruleMatch, rulePriority, ruleBest)))
+                            .bounds(x + colW - 44, y, 20, 22).build());
+
+                    addRenderableWidget(Button.builder(Component.literal("✕"), b -> {
+                        CONFIG.deleteCustomGroup(groupName);
+                        rebuildWidgets();
+                    }).bounds(x + colW - 22, y, 20, 22).build());
+                }
+
+                if (page > 0) addRenderableWidget(Button.builder(Component.literal("‹"), b -> {
+                    page--;
+                    rebuildWidgets();
+                }).bounds(cx - 30, height - 28, 24, 20).build());
+
+                if (end < customList.size()) addRenderableWidget(Button.builder(Component.literal("›"), b -> {
+                    page++;
+                    rebuildWidgets();
+                }).bounds(cx + 6, height - 28, 24, 20).build());
             }
 
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b ->
                     ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, ruleMatch, rulePriority, ruleBest)))
-                    .bounds(cx - 100, height - 30, 200, 20).build());
+                    .bounds(cx - 160, height - 28, 120, 20).build());
         }
 
         //? if <26.1 {
         /*@Override public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float delta) {
             super.render(graphics, mouseX, mouseY, delta);
-            drawGroupPickerIcons(graphics);
+            renderGroupIcons(graphics);
         }*///?} else {
         @Override public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
             super.extractRenderState(graphics, mouseX, mouseY, delta);
-            drawGroupPickerIcons(graphics);
-        }
-        //?}
-
-        //? if <26.1 {
-        /*private void drawGroupPickerIcons(net.minecraft.client.gui.GuiGraphics graphics) {
-            renderGroupIcons(graphics);
-        }*///?} else {
-        private void drawGroupPickerIcons(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
             renderGroupIcons(graphics);
         }
         //?}
@@ -974,26 +1088,271 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //? if <26.1 {
         /*private void renderGroupIcons(net.minecraft.client.gui.GuiGraphics graphics) {
             int cx = width / 2;
-            GuiCompat.drawCenteredText(graphics, font, title, cx, 20, 0xFFFFFFFF);
-            int colW = 175;
-            for (int i = 0; i < groups.size(); i++) {
-                int col = i % 2;
-                int row = i / 2;
-                int x = col == 0 ? cx - colW - 5 : cx + 5;
-                int y = 46 + row * 28;
-                GuiCompat.drawItem(graphics, findItem(groups.get(i).exampleId()), x + 3, y + 4);
+            int colW = 185;
+            if (!showCustom) {
+                int start = page * PAGE_SIZE;
+                int end = Math.min(start + PAGE_SIZE, builtins.size());
+                for (int i = start; i < end; i++) {
+                    int rel = i - start;
+                    int col = rel % 2;
+                    int row = rel / 2;
+                    int x = col == 0 ? cx - colW - 5 : cx + 5;
+                    int y = 46 + row * 24;
+                    GuiCompat.drawItem(graphics, findItem(builtins.get(i).exampleId()), x + 3, y + 3);
+                }
+            } else {
+                List<String> customList = new ArrayList<>(CONFIG.customGroups.keySet());
+                int start = page * PAGE_SIZE;
+                int end = Math.min(start + PAGE_SIZE, customList.size());
+                for (int i = start; i < end; i++) {
+                    int rel = i - start;
+                    int col = rel % 2;
+                    int row = rel / 2;
+                    int x = col == 0 ? cx - colW - 5 : cx + 5;
+                    int y = 46 + row * 24;
+                    List<String> items = CONFIG.getCustomGroupItems(customList.get(i));
+                    ItemStack icon = items.isEmpty() ? findItem("minecraft:chest") : findItem(items.get(0));
+                    GuiCompat.drawItem(graphics, icon, x + 3, y + 3);
+                }
+                if (customList.isEmpty()) {
+                    GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.no_custom_groups"), cx, 80, 0xFFA0A0A0);
+                }
             }
         }*///?} else {
         private void renderGroupIcons(net.minecraft.client.gui.GuiGraphicsExtractor graphics) {
             int cx = width / 2;
-            GuiCompat.drawCenteredText(graphics, font, title, cx, 20, 0xFFFFFFFF);
-            int colW = 175;
-            for (int i = 0; i < groups.size(); i++) {
-                int col = i % 2;
-                int row = i / 2;
-                int x = col == 0 ? cx - colW - 5 : cx + 5;
-                int y = 46 + row * 28;
-                GuiCompat.drawItem(graphics, findItem(groups.get(i).exampleId()), x + 3, y + 4);
+            int colW = 185;
+            if (!showCustom) {
+                int start = page * PAGE_SIZE;
+                int end = Math.min(start + PAGE_SIZE, builtins.size());
+                for (int i = start; i < end; i++) {
+                    int rel = i - start;
+                    int col = rel % 2;
+                    int row = rel / 2;
+                    int x = col == 0 ? cx - colW - 5 : cx + 5;
+                    int y = 46 + row * 24;
+                    GuiCompat.drawItem(graphics, findItem(builtins.get(i).exampleId()), x + 3, y + 3);
+                }
+            } else {
+                List<String> customList = new ArrayList<>(CONFIG.customGroups.keySet());
+                int start = page * PAGE_SIZE;
+                int end = Math.min(start + PAGE_SIZE, customList.size());
+                for (int i = start; i < end; i++) {
+                    int rel = i - start;
+                    int col = rel % 2;
+                    int row = rel / 2;
+                    int x = col == 0 ? cx - colW - 5 : cx + 5;
+                    int y = 46 + row * 24;
+                    List<String> items = CONFIG.getCustomGroupItems(customList.get(i));
+                    ItemStack icon = items.isEmpty() ? findItem("minecraft:chest") : findItem(items.get(0));
+                    GuiCompat.drawItem(graphics, icon, x + 3, y + 3);
+                }
+                if (customList.isEmpty()) {
+                    GuiCompat.drawCenteredText(graphics, font, Component.translatable("screen.hotbarsorter.no_custom_groups"), cx, 80, 0xFFA0A0A0);
+                }
+            }
+        }
+        //?}
+    }
+
+    private final class CustomGroupEditorScreen extends Screen {
+        private final int returnSlot;
+        private final String returnMatch;
+        private final String returnPriority;
+        private final boolean returnBest;
+        private final String initialGroupName;
+        private EditBox nameBox;
+        private EditBox searchBox;
+        private String searchQuery = "";
+        private int page;
+        private final Set<String> selectedItems = new TreeSet<>();
+        private List<ItemOption> filteredItems = List.of();
+        private static final int COLS = 9;
+        private static final int ROWS = 4;
+        private static final int ITEMS_PER_PAGE = COLS * ROWS;
+
+        CustomGroupEditorScreen(String groupName, int returnSlot, String returnMatch, String returnPriority, boolean returnBest) {
+            super(Component.translatable("screen.hotbarsorter.custom_group_editor", groupName.isEmpty() ? "..." : groupName));
+            this.initialGroupName = groupName;
+            this.returnSlot = returnSlot;
+            this.returnMatch = returnMatch;
+            this.returnPriority = returnPriority;
+            this.returnBest = returnBest;
+            if (!groupName.isEmpty()) {
+                selectedItems.addAll(CONFIG.getCustomGroupItems(groupName));
+            }
+        }
+
+        @Override protected void init() {
+            int cx = width / 2;
+
+            nameBox = addRenderableWidget(new EditBox(font, cx - 180, 24, 140, 18,
+                    Component.translatable("screen.hotbarsorter.group_name")));
+            nameBox.setValue(initialGroupName);
+
+            searchBox = addRenderableWidget(new EditBox(font, cx - 35, 24, 150, 18,
+                    Component.translatable("screen.hotbarsorter.search_items")));
+            searchBox.setValue(searchQuery);
+
+            addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.search"), b -> {
+                searchQuery = searchBox.getValue().trim();
+                page = 0;
+                rebuildWidgets();
+            }).bounds(cx + 120, 24, 60, 18).build());
+
+            filteredItems = computeFilteredItems(searchQuery);
+            int totalPages = Math.max(1, (filteredItems.size() + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE);
+            if (page >= totalPages) page = totalPages - 1;
+
+            int start = page * ITEMS_PER_PAGE;
+            int end = Math.min(start + ITEMS_PER_PAGE, filteredItems.size());
+            int gridStartX = cx - (COLS * 24) / 2;
+            int gridStartY = 46;
+
+            for (int i = start; i < end; i++) {
+                int rel = i - start;
+                int col = rel % COLS;
+                int row = rel / COLS;
+                int x = gridStartX + col * 24;
+                int y = gridStartY + row * 24;
+                String itemId = filteredItems.get(i).id();
+
+                addRenderableWidget(Button.builder(Component.empty(), b -> {
+                    if (selectedItems.contains(itemId)) selectedItems.remove(itemId);
+                    else selectedItems.add(itemId);
+                    rebuildWidgets();
+                }).bounds(x, y, 22, 22).build());
+            }
+
+            addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.add_from_inventory"), b -> {
+                if (minecraft != null && minecraft.player != null) {
+                    var inv = minecraft.player.getInventory();
+                    for (int s = 0; s < 36; s++) {
+                        ItemStack st = inv.getItem(s);
+                        if (!st.isEmpty()) {
+                            selectedItems.add(BuiltInRegistries.ITEM.getKey(st.getItem()).toString());
+                        }
+                    }
+                    rebuildWidgets();
+                }
+            }).bounds(cx - 180, 146, 110, 20).build());
+
+            addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.clear_selection"), b -> {
+                selectedItems.clear();
+                rebuildWidgets();
+            }).bounds(cx - 65, 146, 65, 20).build());
+
+            if (page > 0) {
+                addRenderableWidget(Button.builder(Component.literal("‹"), b -> {
+                    page--;
+                    rebuildWidgets();
+                }).bounds(cx + 40, 146, 24, 20).build());
+            }
+            if (end < filteredItems.size()) {
+                addRenderableWidget(Button.builder(Component.literal("›"), b -> {
+                    page++;
+                    rebuildWidgets();
+                }).bounds(cx + 100, 146, 24, 20).build());
+            }
+
+            addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.save_group"), b -> {
+                String name = nameBox.getValue().trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
+                if (!name.isEmpty() && !selectedItems.isEmpty()) {
+                    CONFIG.saveCustomGroup(name, new ArrayList<>(selectedItems));
+                    ClientCompat.setScreen(minecraft, new GroupPickerScreen(returnSlot, returnMatch, returnPriority, returnBest));
+                }
+            }).bounds(cx - 150, height - 28, 145, 20).build());
+
+            addRenderableWidget(Button.builder(Component.translatable("gui.back"), b -> {
+                ClientCompat.setScreen(minecraft, new GroupPickerScreen(returnSlot, returnMatch, returnPriority, returnBest));
+            }).bounds(cx + 5, height - 28, 145, 20).build());
+        }
+
+        private List<ItemOption> computeFilteredItems(String query) {
+            String filter = query.trim().toLowerCase(Locale.ROOT);
+            List<ItemOption> list = new ArrayList<>();
+            for (Item item : BuiltInRegistries.ITEM) {
+                String id = BuiltInRegistries.ITEM.getKey(item).toString();
+                ItemStack stack = new ItemStack(item);
+                String name = stack.getHoverName().getString();
+                if (filter.isEmpty() || id.toLowerCase(Locale.ROOT).contains(filter) || name.toLowerCase(Locale.ROOT).contains(filter)) {
+                    list.add(new ItemOption(id, name, stack));
+                }
+            }
+            list.sort(Comparator.comparing(ItemOption::name));
+            return list;
+        }
+
+        //? if <26.1 {
+        /*@Override public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float delta) {
+            super.render(graphics, mouseX, mouseY, delta);
+            renderGridContent(graphics, mouseX, mouseY);
+        }*///?} else {
+        @Override public void extractRenderState(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
+            super.extractRenderState(graphics, mouseX, mouseY, delta);
+            renderGridContent(graphics, mouseX, mouseY);
+        }
+        //?}
+
+        //? if <26.1 {
+        /*private void renderGridContent(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY) {
+            int cx = width / 2;
+            GuiCompat.drawCenteredText(graphics, font, title, cx, 10, 0xFFFFFFFF);
+            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.selected_items", selectedItems.size()), cx + 5, 151, 0xFF55FF55);
+
+            int start = page * ITEMS_PER_PAGE;
+            int end = Math.min(start + ITEMS_PER_PAGE, filteredItems.size());
+            int gridStartX = cx - (COLS * 24) / 2;
+            int gridStartY = 46;
+
+            for (int i = start; i < end; i++) {
+                int rel = i - start;
+                int col = rel % COLS;
+                int row = rel / COLS;
+                int x = gridStartX + col * 24;
+                int y = gridStartY + row * 24;
+                ItemOption opt = filteredItems.get(i);
+                boolean selected = selectedItems.contains(opt.id());
+
+                if (selected) {
+                    GuiCompat.fill(graphics, x, y, x + 22, y + 22, 0x80206020);
+                    GuiCompat.outline(graphics, x, y, 22, 22, 0xFF55FF55);
+                }
+                GuiCompat.drawItem(graphics, opt.icon(), x + 3, y + 3);
+
+                if (mouseX >= x && mouseX < x + 22 && mouseY >= y && mouseY < y + 22) {
+                    GuiCompat.drawTooltip(graphics, font, List.of(Component.literal(opt.name()), Component.literal(opt.id()).withStyle(ChatFormatting.DARK_GRAY)), mouseX, mouseY);
+                }
+            }
+        }*///?} else {
+        private void renderGridContent(net.minecraft.client.gui.GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+            int cx = width / 2;
+            GuiCompat.drawCenteredText(graphics, font, title, cx, 10, 0xFFFFFFFF);
+            GuiCompat.drawText(graphics, font, Component.translatable("screen.hotbarsorter.selected_items", selectedItems.size()), cx + 5, 151, 0xFF55FF55);
+
+            int start = page * ITEMS_PER_PAGE;
+            int end = Math.min(start + ITEMS_PER_PAGE, filteredItems.size());
+            int gridStartX = cx - (COLS * 24) / 2;
+            int gridStartY = 46;
+
+            for (int i = start; i < end; i++) {
+                int rel = i - start;
+                int col = rel % COLS;
+                int row = rel / COLS;
+                int x = gridStartX + col * 24;
+                int y = gridStartY + row * 24;
+                ItemOption opt = filteredItems.get(i);
+                boolean selected = selectedItems.contains(opt.id());
+
+                if (selected) {
+                    GuiCompat.fill(graphics, x, y, x + 22, y + 22, 0x80206020);
+                    GuiCompat.outline(graphics, x, y, 22, 22, 0xFF55FF55);
+                }
+                GuiCompat.drawItem(graphics, opt.icon(), x + 3, y + 3);
+
+                if (mouseX >= x && mouseX < x + 22 && mouseY >= y && mouseY < y + 22) {
+                    GuiCompat.drawTooltip(graphics, font, List.of(Component.literal(opt.name()), Component.literal(opt.id()).withStyle(ChatFormatting.DARK_GRAY)), mouseX, mouseY);
+                }
             }
         }
         //?}

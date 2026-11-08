@@ -20,6 +20,7 @@ final class ConfigStore {
     Set<String> disabledServers = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
     RuleSet rules = RuleSet.empty();
     Map<String, RuleSet> presets = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    Map<String, List<String>> customGroups = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
     String activePreset = "";
     private long lastModifiedMillis = -1;
 
@@ -83,6 +84,18 @@ final class ConfigStore {
                     catch (RuntimeException ex) { System.err.println("[HotbarSorter] Ignored invalid preset " + entry.getKey()); }
                 }
             }
+            customGroups = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+            if (root.has("customGroups") && root.get("customGroups").isJsonObject()) {
+                for (var entry : root.getAsJsonObject("customGroups").entrySet()) {
+                    try {
+                        List<String> items = new ArrayList<>();
+                        if (entry.getValue().isJsonArray()) {
+                            for (JsonElement el : entry.getValue().getAsJsonArray()) items.add(el.getAsString());
+                        }
+                        customGroups.put(entry.getKey(), items);
+                    } catch (RuntimeException ex) { System.err.println("[HotbarSorter] Ignored invalid group " + entry.getKey()); }
+                }
+            }
             if (presets.isEmpty()) {
                 initDefaultPresets();
             }
@@ -133,6 +146,13 @@ final class ConfigStore {
             JsonObject savedPresets = new JsonObject();
             presets.forEach((name, preset) -> savedPresets.add(name, rulesJson(preset)));
             root.add("presets", savedPresets);
+            JsonObject savedGroups = new JsonObject();
+            customGroups.forEach((name, items) -> {
+                JsonArray arr = new JsonArray();
+                items.forEach(arr::add);
+                savedGroups.add(name, arr);
+            });
+            root.add("customGroups", savedGroups);
             Files.writeString(path, new GsonBuilder().setPrettyPrinting().create().toJson(root), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             lastModifiedMillis = Files.getLastModifiedTime(path).toMillis();
         } catch (IOException ex) { System.err.println("[HotbarSorter] Could not save config: " + ex.getMessage()); }
@@ -167,6 +187,22 @@ final class ConfigStore {
         slots.set(slot, rules.locked(slot) ? List.of() : List.of(Rule.lockedRule()));
         rules = new RuleSet(slots, rules.unmatched());
         save();
+    }
+
+    void saveCustomGroup(String name, List<String> items) {
+        if (name == null || name.isBlank()) return;
+        customGroups.put(name.trim(), new ArrayList<>(items));
+        save();
+    }
+
+    void deleteCustomGroup(String name) {
+        if (name == null) return;
+        customGroups.remove(name.trim());
+        save();
+    }
+
+    List<String> getCustomGroupItems(String name) {
+        return customGroups.getOrDefault(name, List.of());
     }
 
     void savePreset(String name) {

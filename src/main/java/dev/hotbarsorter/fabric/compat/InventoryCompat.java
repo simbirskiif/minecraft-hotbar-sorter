@@ -28,6 +28,10 @@ public final class InventoryCompat {
     }
 
     public static List<ItemView> snapshot(Minecraft client) {
+        return snapshot(client, Map.of());
+    }
+
+    public static List<ItemView> snapshot(Minecraft client, Map<String, List<String>> customGroups) {
         var result = new ArrayList<ItemView>(36);
         for (int i = 0; i < 36; i++) {
             ItemStack stack = client.player.getInventory().getItem(i);
@@ -53,10 +57,37 @@ public final class InventoryCompat {
             if (stack.is(ItemTags.LOGS)) tags.add("minecraft:logs");
             if (stack.is(ItemTags.PLANKS)) tags.add("minecraft:planks");
             if (stack.is(ItemTags.ARROWS)) tags.add("minecraft:arrows");
-            if (stack.get(DataComponents.FOOD) != null) tags.add("minecraft:food");
+            if (stack.is(ItemTags.BEDS)) tags.add("minecraft:beds");
+            if (stack.get(DataComponents.FOOD) != null) {
+                tags.add("minecraft:food");
+                tags.add("builtin:food");
+            }
             String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
-            if (id.equals("minecraft:bow") || id.equals("minecraft:crossbow")) tags.add("minecraft:bows");
-            if (id.contains("potion")) tags.add("minecraft:potions");
+            if (id.equals("minecraft:bow") || id.equals("minecraft:crossbow")) {
+                tags.add("minecraft:bows");
+                tags.add("builtin:bows");
+            }
+            if (id.contains("potion")) {
+                tags.add("minecraft:potions");
+                tags.add("builtin:potions");
+            }
+            if (id.contains("golden_apple")) tags.add("builtin:golden_apples");
+            if (id.endsWith("_concrete") && !id.contains("powder")) tags.add("builtin:concrete");
+            if (id.endsWith("_concrete_powder")) tags.add("builtin:concrete_powder");
+            if (id.contains("terracotta")) tags.add("builtin:terracotta");
+            if (id.contains("glass") && !id.contains("bottle") && !id.contains("spyglass")) tags.add("builtin:glass");
+            if (id.contains("stone") || id.contains("deepslate") || id.contains("granite") || id.contains("diorite") || id.contains("andesite") || id.contains("blackstone")) tags.add("builtin:stone");
+            if (id.contains("_ore") || id.startsWith("minecraft:raw_")) tags.add("builtin:ores");
+            if (id.contains("log") || id.contains("plank") || id.contains("wood") || id.contains("stem") || id.contains("hyphae")) tags.add("builtin:all_wood");
+
+            if (customGroups != null) {
+                for (var entry : customGroups.entrySet()) {
+                    if (entry.getValue().contains(id)) {
+                        tags.add("group:" + entry.getKey());
+                        tags.add("custom:" + entry.getKey());
+                    }
+                }
+            }
             result.add(new ItemView(id, tags, count, durability, materialRank(id)));
         }
         return result;
@@ -79,8 +110,7 @@ public final class InventoryCompat {
         for (int source = 9; source < 36; source++) {
             ItemStack stack = inventory.getItem(source);
             if (stack.isEmpty() || stack.getCount() >= stack.getMaxStackSize()) continue;
-            for (int target = 0; target < 36; target++) {
-                if (target == source) continue;
+            for (int target = 0; target < 9; target++) {
                 ItemStack other = inventory.getItem(target);
                 if (!other.isEmpty() && other.getCount() < other.getMaxStackSize()
                         && ItemStack.isSameItemSameComponents(stack, other)) {
