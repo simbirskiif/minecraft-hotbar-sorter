@@ -21,9 +21,14 @@ import net.minecraft.world.item.ItemStack;
 import java.util.*;
 
 public final class HotbarSorterClient implements ClientModInitializer {
+    private static HotbarSorterClient INSTANCE;
     private static final ConfigStore CONFIG = new ConfigStore();
     private static KeyMapping sortKey;
     private static KeyMapping settingsKey;
+
+    public static void sortNow() {
+        if (INSTANCE != null) INSTANCE.requestSort();
+    }
     private final SortPlanner planner = new SortPlanner();
     private boolean sortingRequested;
     private int clicksRemaining;
@@ -41,6 +46,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
     private int manualMoveCooldown;
 
     @Override public void onInitializeClient() {
+        INSTANCE = this;
         CONFIG.load();
         sortKey = KeybindCompat.register("key.hotbarsorter.sort", false);
         settingsKey = KeybindCompat.register("key.hotbarsorter.settings", true);
@@ -201,10 +207,21 @@ public final class HotbarSorterClient implements ClientModInitializer {
         return ItemStack.EMPTY;
     }
 
-    private final class SettingsScreen extends Screen {
+    public static final class SettingsScreen extends Screen {
+        private final Screen parent;
         private int dragSlot = -1;
 
-        SettingsScreen() { super(Component.translatable("screen.hotbarsorter.title")); }
+        public SettingsScreen() { this(null); }
+
+        public SettingsScreen(Screen parent) {
+            super(Component.translatable("screen.hotbarsorter.title"));
+            this.parent = parent;
+        }
+
+        @Override public void onClose() {
+            if (parent != null) ClientCompat.setScreen(minecraft, parent);
+            else super.onClose();
+        }
 
         @Override protected void init() {
             int cx = width / 2;
@@ -219,7 +236,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             String presetText = CONFIG.activePreset.isEmpty() ? "Default" : CONFIG.activePreset;
             if (CONFIG.isModified()) presetText += " *";
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.preset", presetText), b ->
-                    ClientCompat.setScreen(minecraft, new PresetManagerScreen())).bounds(cx - 124, cy - 62, 172, 20).build());
+                    ClientCompat.setScreen(minecraft, new PresetManagerScreen(parent))).bounds(cx - 124, cy - 62, 172, 20).build());
 
             addRenderableWidget(Button.builder(Component.literal("›"), b -> {
                 CONFIG.cyclePreset(true);
@@ -227,7 +244,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }).bounds(cx + 52, cy - 62, 22, 20).build());
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.presets_btn"), b ->
-                    ClientCompat.setScreen(minecraft, new PresetManagerScreen())).bounds(cx + 78, cy - 62, 72, 20).build());
+                    ClientCompat.setScreen(minecraft, new PresetManagerScreen(parent))).bounds(cx + 78, cy - 62, 72, 20).build());
 
             // Bottom controls
             addRenderableWidget(Button.builder(enabledLabel(), b -> {
@@ -237,7 +254,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }).bounds(cx - 150, cy + 34, 145, 20).build());
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.sort_now"), b ->
-                    requestSort()).bounds(cx + 5, cy + 34, 145, 20).build());
+                    sortNow()).bounds(cx + 5, cy + 34, 145, 20).build());
 
             addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> onClose())
                     .bounds(cx - 100, cy + 60, 200, 20).build());
@@ -287,7 +304,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
                     CONFIG.swapSlots(source, target);
                     rebuildWidgets();
                 } else if (target == source) {
-                    ClientCompat.setScreen(minecraft, new RuleEditorScreen(source));
+                    ClientCompat.setScreen(minecraft, new RuleEditorScreen(parent, source));
                 }
                 return true;
             }
@@ -437,11 +454,17 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //?}
     }
 
-    private final class PresetManagerScreen extends Screen {
+    private static final class PresetManagerScreen extends Screen {
+        private final Screen parent;
         private int page;
         private static final int PAGE_SIZE = 4;
 
-        PresetManagerScreen() { super(Component.translatable("screen.hotbarsorter.preset_manager")); }
+        PresetManagerScreen(Screen parent) {
+            super(Component.translatable("screen.hotbarsorter.preset_manager"));
+            this.parent = parent;
+        }
+
+        PresetManagerScreen() { this(null); }
 
         @Override protected void init() {
             int cx = width / 2;
@@ -469,7 +492,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
 
                 addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.preset_load"), b -> {
                     CONFIG.loadPreset(presetName);
-                    ClientCompat.setScreen(minecraft, new SettingsScreen());
+                    ClientCompat.setScreen(minecraft, new SettingsScreen(parent));
                 }).bounds(cardX + 11, cardY + 44, 82, 18).build());
 
                 addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.preset_overwrite"), b -> {
@@ -479,7 +502,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.new_preset"), b ->
-                    ClientCompat.setScreen(minecraft, new PresetNameScreen())).bounds(cx - 170, height - 32, 105, 20).build());
+                    ClientCompat.setScreen(minecraft, new PresetNameScreen(parent))).bounds(cx - 170, height - 32, 105, 20).build());
 
             if (page > 0) {
                 addRenderableWidget(Button.builder(Component.literal("‹"), b -> {
@@ -495,7 +518,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }
 
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b ->
-                    ClientCompat.setScreen(minecraft, new SettingsScreen())).bounds(cx + 65, height - 32, 105, 20).build());
+                    ClientCompat.setScreen(minecraft, new SettingsScreen(parent))).bounds(cx + 65, height - 32, 105, 20).build());
         }
 
         //? if <26.1 {
@@ -605,9 +628,14 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //?}
     }
 
-    private final class PresetNameScreen extends Screen {
+    private static final class PresetNameScreen extends Screen {
+        private final Screen parent;
         private EditBox name;
-        PresetNameScreen() { super(Component.translatable("screen.hotbarsorter.save_preset")); }
+        PresetNameScreen(Screen parent) {
+            super(Component.translatable("screen.hotbarsorter.save_preset"));
+            this.parent = parent;
+        }
+        PresetNameScreen() { this(null); }
 
         @Override protected void init() {
             int cx = width / 2;
@@ -617,12 +645,12 @@ public final class HotbarSorterClient implements ClientModInitializer {
                 String value = name.getValue().trim();
                 if (!value.isEmpty()) {
                     CONFIG.savePreset(value);
-                    ClientCompat.setScreen(minecraft, new PresetManagerScreen());
+                    ClientCompat.setScreen(minecraft, new PresetManagerScreen(parent));
                 }
             }).bounds(cx - 100, height / 2 + 14, 200, 20).build());
 
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b ->
-                    ClientCompat.setScreen(minecraft, new PresetManagerScreen())).bounds(cx - 100, height / 2 + 38, 200, 20).build());
+                    ClientCompat.setScreen(minecraft, new PresetManagerScreen(parent))).bounds(cx - 100, height / 2 + 38, 200, 20).build());
         }
 
         //? if <26.1 {
@@ -637,7 +665,8 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //?}
     }
 
-    private final class RuleEditorScreen extends Screen {
+    private static final class RuleEditorScreen extends Screen {
+        private final Screen parent;
         private final int slot;
         private EditBox matcher;
         private boolean best;
@@ -645,17 +674,27 @@ public final class HotbarSorterClient implements ClientModInitializer {
         private final List<ItemStack> inventoryPalette = new ArrayList<>();
         private int dragRule = -1;
 
-        RuleEditorScreen(int slot) { this(slot, "", true); }
+        RuleEditorScreen(Screen parent, int slot) { this(parent, slot, "", true); }
+        RuleEditorScreen(int slot) { this(null, slot, "", true); }
 
-        RuleEditorScreen(int slot, String matchValue, boolean bestValue) {
+        RuleEditorScreen(Screen parent, int slot, String matchValue, boolean bestValue) {
             super(Component.translatable("screen.hotbarsorter.rule_title", slot + 1));
+            this.parent = parent;
             this.slot = slot;
             this.initialMatch = matchValue;
             this.best = bestValue;
         }
 
+        RuleEditorScreen(int slot, String matchValue, boolean bestValue) {
+            this(null, slot, matchValue, bestValue);
+        }
+
+        RuleEditorScreen(Screen parent, int slot, String matchValue, String priorityValue, boolean bestValue) {
+            this(parent, slot, matchValue, bestValue);
+        }
+
         RuleEditorScreen(int slot, String matchValue, String priorityValue, boolean bestValue) {
-            this(slot, matchValue, bestValue);
+            this(null, slot, matchValue, bestValue);
         }
 
         @Override protected void init() {
@@ -666,16 +705,16 @@ public final class HotbarSorterClient implements ClientModInitializer {
             matcher.setValue(initialMatch);
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.choose_item"), b ->
-                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(slot, matcher.getValue(), "10", best, "", 0)))
+                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(parent, slot, matcher.getValue(), "10", best, "", 0)))
                     .bounds(center - 150, 46, 146, 18).build());
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.choose_group"), b ->
-                    ClientCompat.setScreen(minecraft, new GroupPickerScreen(slot, matcher.getValue(), "10", best)))
+                    ClientCompat.setScreen(minecraft, new GroupPickerScreen(parent, slot, matcher.getValue(), "10", best)))
                     .bounds(center + 4, 46, 146, 18).build());
 
             addRenderableWidget(Button.builder(lockLabel(), b -> {
                 CONFIG.toggleLock(slot);
-                ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot));
+                ClientCompat.setScreen(minecraft, new RuleEditorScreen(parent, slot));
             }).bounds(center - 150, 66, 146, 18).build());
 
             addRenderableWidget(Button.builder(pickLabel(), b -> {
@@ -756,7 +795,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }
 
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b ->
-                    ClientCompat.setScreen(minecraft, new SettingsScreen())).bounds(center - 100, height - 26, 200, 20).build());
+                    ClientCompat.setScreen(minecraft, new SettingsScreen(parent))).bounds(center - 100, height - 26, 200, 20).build());
         }
 
         //? if <1.21.9 {
@@ -921,7 +960,8 @@ public final class HotbarSorterClient implements ClientModInitializer {
 
     private record ItemOption(String id, String name, ItemStack icon) {}
 
-    private final class ItemPickerScreen extends Screen {
+    private static final class ItemPickerScreen extends Screen {
+        private final Screen parent;
         private final int slot;
         private final String ruleMatch;
         private final String rulePriority;
@@ -933,14 +973,19 @@ public final class HotbarSorterClient implements ClientModInitializer {
         private static final int PAGE_SIZE = 8;
         private int totalItems;
 
-        ItemPickerScreen(int slot, String ruleMatch, String rulePriority, boolean ruleBest, String query, int page) {
+        ItemPickerScreen(Screen parent, int slot, String ruleMatch, String rulePriority, boolean ruleBest, String query, int page) {
             super(Component.translatable("screen.hotbarsorter.item_picker"));
+            this.parent = parent;
             this.slot = slot;
             this.ruleMatch = ruleMatch;
             this.rulePriority = rulePriority;
             this.ruleBest = ruleBest;
             this.initialQuery = query;
             this.page = page;
+        }
+
+        ItemPickerScreen(int slot, String ruleMatch, String rulePriority, boolean ruleBest, String query, int page) {
+            this(null, slot, ruleMatch, rulePriority, ruleBest, query, page);
         }
 
         @Override protected void init() {
@@ -950,7 +995,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             search.setValue(initialQuery);
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.search"), b ->
-                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(slot, ruleMatch, rulePriority, ruleBest, search.getValue().trim(), 0)))
+                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(parent, slot, ruleMatch, rulePriority, ruleBest, search.getValue().trim(), 0)))
                     .bounds(left + 280, 46, 100, 20).build());
 
             List<ItemOption> matches = matchingItems(initialQuery);
@@ -963,19 +1008,19 @@ public final class HotbarSorterClient implements ClientModInitializer {
                 int y = 72 + i * 25;
                 Component label = Component.literal(option.name() + " (" + option.id() + ")");
                 addRenderableWidget(Button.builder(label, b ->
-                        ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, option.id(), rulePriority, ruleBest)))
+                        ClientCompat.setScreen(minecraft, new RuleEditorScreen(parent, slot, option.id(), rulePriority, ruleBest)))
                         .bounds(left + 24, y, 356, 22).build());
             }
 
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b ->
-                    ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, ruleMatch, rulePriority, ruleBest)))
+                    ClientCompat.setScreen(minecraft, new RuleEditorScreen(parent, slot, ruleMatch, rulePriority, ruleBest)))
                     .bounds(left, height - 30, 110, 20).build());
 
             if (page > 0) addRenderableWidget(Button.builder(Component.literal("‹"), b ->
-                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(slot, ruleMatch, rulePriority, ruleBest, initialQuery, page - 1)))
+                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(parent, slot, ruleMatch, rulePriority, ruleBest, initialQuery, page - 1)))
                     .bounds(width / 2 + 90, height - 30, 30, 20).build());
             if (firstIndex + PAGE_SIZE < matches.size()) addRenderableWidget(Button.builder(Component.literal("›"), b ->
-                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(slot, ruleMatch, rulePriority, ruleBest, initialQuery, page + 1)))
+                    ClientCompat.setScreen(minecraft, new ItemPickerScreen(parent, slot, ruleMatch, rulePriority, ruleBest, initialQuery, page + 1)))
                     .bounds(width / 2 + 130, height - 30, 30, 20).build());
         }
 
@@ -1037,7 +1082,8 @@ public final class HotbarSorterClient implements ClientModInitializer {
 
     private record GroupOption(String key, String matcher, String exampleId) {}
 
-    private final class GroupPickerScreen extends Screen {
+    private static final class GroupPickerScreen extends Screen {
+        private final Screen parent;
         private final int slot;
         private final String ruleMatch;
         private final String rulePriority;
@@ -1069,12 +1115,17 @@ public final class HotbarSorterClient implements ClientModInitializer {
                 new GroupOption("screen.hotbarsorter.group_arrows", "#minecraft:arrows", "minecraft:arrow"),
                 new GroupOption("screen.hotbarsorter.group_potions", "#builtin:potions", "minecraft:potion"));
 
-        GroupPickerScreen(int slot, String ruleMatch, String rulePriority, boolean ruleBest) {
+        GroupPickerScreen(Screen parent, int slot, String ruleMatch, String rulePriority, boolean ruleBest) {
             super(Component.translatable("screen.hotbarsorter.group_picker"));
+            this.parent = parent;
             this.slot = slot;
             this.ruleMatch = ruleMatch;
             this.rulePriority = rulePriority;
             this.ruleBest = ruleBest;
+        }
+
+        GroupPickerScreen(int slot, String ruleMatch, String rulePriority, boolean ruleBest) {
+            this(null, slot, ruleMatch, rulePriority, ruleBest);
         }
 
         @Override protected void init() {
@@ -1095,7 +1146,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }).bounds(cx - 65, 24, 110, 18).build());
 
             addRenderableWidget(Button.builder(Component.translatable("screen.hotbarsorter.new_group"), b -> {
-                ClientCompat.setScreen(minecraft, new CustomGroupEditorScreen("", slot, ruleMatch, rulePriority, ruleBest));
+                ClientCompat.setScreen(minecraft, new CustomGroupEditorScreen(parent, "", slot, ruleMatch, rulePriority, ruleBest));
             }).bounds(cx + 50, 24, 130, 18).build());
 
             if (!showCustom) {
@@ -1113,7 +1164,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
                     int y = 46 + row * 24;
 
                     addRenderableWidget(Button.builder(Component.translatable(group.key()), b ->
-                            ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, group.matcher(), rulePriority, ruleBest)))
+                            ClientCompat.setScreen(minecraft, new RuleEditorScreen(parent, slot, group.matcher(), rulePriority, ruleBest)))
                             .bounds(x + 22, y, colW - 22, 22).build());
                 }
 
@@ -1144,11 +1195,11 @@ public final class HotbarSorterClient implements ClientModInitializer {
                     List<String> items = CONFIG.getCustomGroupItems(groupName);
                     Component label = Component.literal("#group:" + groupName + " (" + items.size() + ")");
                     addRenderableWidget(Button.builder(label, b ->
-                            ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, "#group:" + groupName, rulePriority, ruleBest)))
+                            ClientCompat.setScreen(minecraft, new RuleEditorScreen(parent, slot, "#group:" + groupName, rulePriority, ruleBest)))
                             .bounds(x + 22, y, colW - 68, 22).build());
 
                     addRenderableWidget(Button.builder(Component.literal("✎"), b ->
-                            ClientCompat.setScreen(minecraft, new CustomGroupEditorScreen(groupName, slot, ruleMatch, rulePriority, ruleBest)))
+                            ClientCompat.setScreen(minecraft, new CustomGroupEditorScreen(parent, groupName, slot, ruleMatch, rulePriority, ruleBest)))
                             .bounds(x + colW - 44, y, 20, 22).build());
 
                     addRenderableWidget(Button.builder(Component.literal("✕"), b -> {
@@ -1169,7 +1220,7 @@ public final class HotbarSorterClient implements ClientModInitializer {
             }
 
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b ->
-                    ClientCompat.setScreen(minecraft, new RuleEditorScreen(slot, ruleMatch, rulePriority, ruleBest)))
+                    ClientCompat.setScreen(minecraft, new RuleEditorScreen(parent, slot, ruleMatch, rulePriority, ruleBest)))
                     .bounds(cx - 160, height - 28, 120, 20).build());
         }
 
@@ -1254,7 +1305,8 @@ public final class HotbarSorterClient implements ClientModInitializer {
         //?}
     }
 
-    private final class CustomGroupEditorScreen extends Screen {
+    private static final class CustomGroupEditorScreen extends Screen {
+        private final Screen parent;
         private final int returnSlot;
         private final String returnMatch;
         private final String returnPriority;
@@ -1270,8 +1322,9 @@ public final class HotbarSorterClient implements ClientModInitializer {
         private static final int ROWS = 4;
         private static final int ITEMS_PER_PAGE = COLS * ROWS;
 
-        CustomGroupEditorScreen(String groupName, int returnSlot, String returnMatch, String returnPriority, boolean returnBest) {
+        CustomGroupEditorScreen(Screen parent, String groupName, int returnSlot, String returnMatch, String returnPriority, boolean returnBest) {
             super(Component.translatable("screen.hotbarsorter.custom_group_editor", groupName.isEmpty() ? "..." : groupName));
+            this.parent = parent;
             this.initialGroupName = groupName;
             this.returnSlot = returnSlot;
             this.returnMatch = returnMatch;
@@ -1280,6 +1333,10 @@ public final class HotbarSorterClient implements ClientModInitializer {
             if (!groupName.isEmpty()) {
                 selectedItems.addAll(CONFIG.getCustomGroupItems(groupName));
             }
+        }
+
+        CustomGroupEditorScreen(String groupName, int returnSlot, String returnMatch, String returnPriority, boolean returnBest) {
+            this(null, groupName, returnSlot, returnMatch, returnPriority, returnBest);
         }
 
         @Override protected void init() {
@@ -1358,12 +1415,12 @@ public final class HotbarSorterClient implements ClientModInitializer {
                 String name = nameBox.getValue().trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "_");
                 if (!name.isEmpty() && !selectedItems.isEmpty()) {
                     CONFIG.saveCustomGroup(name, new ArrayList<>(selectedItems));
-                    ClientCompat.setScreen(minecraft, new GroupPickerScreen(returnSlot, returnMatch, returnPriority, returnBest));
+                    ClientCompat.setScreen(minecraft, new GroupPickerScreen(parent, returnSlot, returnMatch, returnPriority, returnBest));
                 }
             }).bounds(cx - 150, height - 28, 145, 20).build());
 
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), b -> {
-                ClientCompat.setScreen(minecraft, new GroupPickerScreen(returnSlot, returnMatch, returnPriority, returnBest));
+                ClientCompat.setScreen(minecraft, new GroupPickerScreen(parent, returnSlot, returnMatch, returnPriority, returnBest));
             }).bounds(cx + 5, height - 28, 145, 20).build());
         }
 

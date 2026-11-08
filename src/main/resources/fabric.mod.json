@@ -7,7 +7,10 @@
   "icon": "assets/hotbarsorter/icon.png",
   "license": "MIT",
   "environment": "client",
-  "entrypoints": { "client": ["dev.hotbarsorter.fabric.HotbarSorterClient"] },
+  "entrypoints": {
+    "client": ["dev.hotbarsorter.fabric.HotbarSorterClient"],
+    "modmenu": ["dev.hotbarsorter.fabric.compat.ModMenuCompat"]
+  },
   "depends": {
     "fabricloader": ">=${loader}",
     "minecraft": "${minecraft}",

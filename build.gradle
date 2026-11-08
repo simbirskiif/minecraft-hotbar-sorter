@@ -54,6 +54,10 @@ processResources {
     }
 }
 
+tasks.withType(Jar).configureEach {
+    exclude 'com/terraformersmc/**'
+}
+
 tasks.register('buildAndCollect', Copy) {
     group = 'build'
     description = "Builds this Minecraft node and copies its mod jar to ${rootProject.layout.buildDirectory.dir('libs').get().asFile}"
